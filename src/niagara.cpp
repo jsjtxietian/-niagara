@@ -1,6 +1,3 @@
-// niagara.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
-
 #include <assert.h>
 #include <stdio.h>
 
@@ -8,11 +5,18 @@
 #include <GLFW/glfw3native.h>
 #include <vulkan/vulkan.h>
 
+#include <vector>
+#include <algorithm>
+
 #define VK_CHECK(call) \
 	do { \
 		VkResult result_ = call; \
 		assert(result_ == VK_SUCCESS); \
 	} while (0)
+
+#ifndef ARRAYSIZE
+#define ARRAYSIZE(array) (sizeof(array) / sizeof((array)[0]))
+#endif
 
 VkInstance createInstance()
 {
@@ -39,6 +43,9 @@ VkInstance createInstance()
 #ifdef VK_USE_PLATFORM_WIN32_KHR
 		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 #endif
+#ifdef _DEBUG
+		VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+#endif
 	};
 
 	createInfo.ppEnabledExtensionNames = extensions;
@@ -50,47 +57,113 @@ VkInstance createInstance()
 	return instance;
 }
 
-uint32_t getGraphicsQueueFamily(VkPhysicalDevice physicalDevice)
+VkBool32 debugReportCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location, int32_t messageCode, const char* pLayerPrefix, const char* pMessage, void* pUserData)
 {
-	VkQueueFamilyProperties queues[64];
-	uint32_t queueCount = sizeof(queues) / sizeof(queues[0]);
-	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueCount, queues);
+	const char* type =
+		(flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		? "ERROR"
+		: (flags & (VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT))
+			? "WARNING"
+			: "INFO";
+
+	char message[4096];
+	snprintf(message, ARRAYSIZE(message), "%s: %s\n", type, pMessage);
+
+	printf("%s", message);
+
+#ifdef _WIN32
+	OutputDebugStringA(message);
+#endif
+
+	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		assert(!"Validation error encountered!");
+
+	return VK_FALSE;
+}
+
+VkDebugReportCallbackEXT registerDebugCallback(VkInstance instance)
+{
+	VkDebugReportCallbackCreateInfoEXT createInfo = { VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT };
+	createInfo.flags = VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT | VK_DEBUG_REPORT_ERROR_BIT_EXT;
+	createInfo.pfnCallback = debugReportCallback;
+
+	PFN_vkCreateDebugReportCallbackEXT vkCreateDebugReportCallbackEXT = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
+
+	VkDebugReportCallbackEXT callback = 0;
+	VK_CHECK(vkCreateDebugReportCallbackEXT(instance, &createInfo, 0, &callback));
+
+	return callback;
+}
+
+uint32_t getGraphicsFamilyIndex(VkPhysicalDevice physicalDevice)
+{
+	uint32_t queueCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueCount, 0);
+
+	std::vector<VkQueueFamilyProperties> queues(queueCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueCount, queues.data());
 
 	for (uint32_t i = 0; i < queueCount; ++i)
 		if (queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
 			return i;
 
-	// TODO: this can be used in pickPhysicalDevice to pick rasterization-capable device
-	assert(!"No queue families support graphics, is this a compute-only device?");
-	return 0;
+	return VK_QUEUE_FAMILY_IGNORED;
 }
 
+bool supportsPresentation(VkPhysicalDevice physicalDevice, uint32_t familyIndex)
+{
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+	return vkGetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, familyIndex);
+#else
+	return true;
+#endif
+}
 
 VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice* physicalDevices, uint32_t physicalDeviceCount)
 {
+	VkPhysicalDevice discrete = 0;
+	VkPhysicalDevice fallback = 0;
+
 	for (uint32_t i = 0; i < physicalDeviceCount; ++i)
 	{
 		VkPhysicalDeviceProperties props;
 		vkGetPhysicalDeviceProperties(physicalDevices[i], &props);
 
-		if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+		printf("GPU%d: %s\n", i, props.deviceName);
+
+		uint32_t familyIndex = getGraphicsFamilyIndex(physicalDevices[i]);
+		if (familyIndex == VK_QUEUE_FAMILY_IGNORED)
+			continue;
+
+		if (!supportsPresentation(physicalDevices[i], familyIndex))
+			continue;
+
+		if (!discrete && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 		{
-			printf("Picking discrete GPU: %s\n", props.deviceName);
-			return physicalDevices[i];
+			discrete = physicalDevices[i];
+		}
+
+		if (!fallback)
+		{
+			fallback = physicalDevices[i];
 		}
 	}
 
-	if (physicalDeviceCount > 0)
+	VkPhysicalDevice result = discrete ? discrete : fallback;
+
+	if (result)
 	{
 		VkPhysicalDeviceProperties props;
-		vkGetPhysicalDeviceProperties(physicalDevices[0], &props);
+		vkGetPhysicalDeviceProperties(result, &props);
 
-		printf("Picking fallback GPU: %s\n", props.deviceName);
-		return physicalDevices[0];
+		printf("Selected GPU %s\n", props.deviceName);
+	}
+	else
+	{
+		printf("ERROR: No GPUs found\n");
 	}
 
-	printf("No physical devices available!");
-	return 0;
+	return result;
 }
 
 VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t familyIndex)
@@ -137,19 +210,37 @@ VkSurfaceKHR createSurface(VkInstance instance, GLFWwindow* window)
 
 VkFormat getSwapchainFormat(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface)
 {
-	VkSurfaceFormatKHR formats[16];
-	uint32_t formatCount = sizeof(formats) / sizeof(formats[0]);
-	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats));
+	uint32_t formatCount = 0;
+	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, 0));
+	assert(formatCount > 0);
 
-	assert(formatCount > 0); // TODO: this code might need to handle either formatCount being 0, or first element reporting VK_FORMAT_UNDEFINED
+	std::vector<VkSurfaceFormatKHR> formats(formatCount);
+	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data()));
+
+	if (formatCount == 1 && formats[0].format == VK_FORMAT_UNDEFINED)
+		return VK_FORMAT_R8G8B8A8_UNORM;
+
+	for (uint32_t i = 0; i < formatCount; ++i)
+		if (formats[i].format == VK_FORMAT_R8G8B8A8_UNORM || formats[i].format == VK_FORMAT_B8G8R8A8_UNORM)
+			return formats[i].format;
+
 	return formats[0].format;
 }
 
-VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, uint32_t familyIndex, VkFormat format, uint32_t width, uint32_t height)
+VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR surfaceCaps, uint32_t familyIndex, VkFormat format, uint32_t width, uint32_t height, VkSwapchainKHR oldSwapchain)
 {
+	VkCompositeAlphaFlagBitsKHR surfaceComposite =
+		(surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+		? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+		: (surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+		? VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR
+		: (surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR)
+		? VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR
+		: VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+
 	VkSwapchainCreateInfoKHR createInfo = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
 	createInfo.surface = surface;
-	createInfo.minImageCount = 2;
+	createInfo.minImageCount = std::max(2u, surfaceCaps.minImageCount);
 	createInfo.imageFormat = format;
 	createInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 	createInfo.imageExtent.width = width;
@@ -159,8 +250,9 @@ VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, uint32_t f
 	createInfo.queueFamilyIndexCount = 1;
 	createInfo.pQueueFamilyIndices = &familyIndex;
 	createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-	createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	createInfo.compositeAlpha = surfaceComposite;
 	createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+	createInfo.oldSwapchain = oldSwapchain;
 
 	VkSwapchainKHR swapchain = 0;
 	VK_CHECK(vkCreateSwapchainKHR(device, &createInfo, 0, &swapchain));
@@ -356,6 +448,106 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
 	return pipeline;
 }
 
+VkImageMemoryBarrier imageBarrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask, VkImageLayout oldLayout, VkImageLayout newLayout)
+{
+	VkImageMemoryBarrier result = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+
+	result.srcAccessMask = srcAccessMask;
+	result.dstAccessMask = dstAccessMask;
+	result.oldLayout = oldLayout;
+	result.newLayout = newLayout;
+	result.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	result.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	result.image = image;
+	result.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	result.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+	result.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+	return result;
+}
+
+struct Swapchain
+{
+	VkSwapchainKHR swapchain;
+
+	std::vector<VkImage> images;
+	std::vector<VkImageView> imageViews;
+	std::vector<VkFramebuffer> framebuffers;
+
+	uint32_t width, height;
+	uint32_t imageCount;
+};
+
+void createSwapchain(Swapchain& result, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface,  uint32_t familyIndex, VkFormat format, uint32_t width, uint32_t height, VkRenderPass renderPass, VkSwapchainKHR oldSwapchain = 0)
+{
+	VkSurfaceCapabilitiesKHR surfaceCaps;
+	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps));
+
+	VkSwapchainKHR swapchain = createSwapchain(device, surface, surfaceCaps, familyIndex, format, width, height, oldSwapchain);
+	assert(swapchain);
+
+	uint32_t imageCount = 0;
+	VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, 0));
+
+	std::vector<VkImage> images(imageCount);
+	VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, images.data()));
+
+	std::vector<VkImageView> imageViews(imageCount);
+	for (uint32_t i = 0; i < imageCount; ++i)
+	{
+		imageViews[i] = createImageView(device, images[i], format);
+		assert(imageViews[i]);
+	}
+
+	std::vector<VkFramebuffer> framebuffers(imageCount);
+	for (uint32_t i = 0; i < imageCount; ++i)
+	{
+		framebuffers[i] = createFramebuffer(device, renderPass, imageViews[i], width, height);
+		assert(framebuffers[i]);
+	}
+
+	result.swapchain = swapchain;
+
+	result.images = images;
+	result.imageViews = imageViews;
+	result.framebuffers = framebuffers;
+
+	result.width = width;
+	result.height = height;
+	result.imageCount = imageCount;
+}
+
+void destroySwapchain(VkDevice device, const Swapchain& swapchain)
+{
+	for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+		vkDestroyFramebuffer(device, swapchain.framebuffers[i], 0);
+
+	for (uint32_t i = 0; i < swapchain.imageCount; ++i)
+		vkDestroyImageView(device, swapchain.imageViews[i], 0);
+
+	vkDestroySwapchainKHR(device, swapchain.swapchain, 0);
+}
+
+void resizeSwapchainIfNecessary(Swapchain& result, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, uint32_t familyIndex, VkFormat format, VkRenderPass renderPass)
+{
+	VkSurfaceCapabilitiesKHR surfaceCaps;
+	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps));
+
+	uint32_t newWidth = surfaceCaps.currentExtent.width;
+	uint32_t newHeight = surfaceCaps.currentExtent.height;
+
+	if (result.width == newWidth && result.height == newHeight)
+		return;
+
+	Swapchain old = result;
+
+	createSwapchain(result, physicalDevice, device, surface, familyIndex, format, newWidth, newHeight, renderPass, old.swapchain);
+
+	VK_CHECK(vkDeviceWaitIdle(device));
+
+	destroySwapchain(device, old);
+}
+
 int main()
 {
 	int rc = glfwInit();
@@ -364,6 +556,10 @@ int main()
 	VkInstance instance = createInstance();
 	assert(instance);
 
+#ifdef _DEBUG
+	VkDebugReportCallbackEXT debugCallback = registerDebugCallback(instance);
+#endif
+
 	VkPhysicalDevice physicalDevices[16];
 	uint32_t physicalDeviceCount = sizeof(physicalDevices) / sizeof(physicalDevices[0]);
 	VK_CHECK(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices));
@@ -371,7 +567,9 @@ int main()
 	VkPhysicalDevice physicalDevice = pickPhysicalDevice(physicalDevices, physicalDeviceCount);
 	assert(physicalDevice);
 
-	uint32_t familyIndex = getGraphicsQueueFamily(physicalDevice);
+	uint32_t familyIndex = getGraphicsFamilyIndex(physicalDevice);
+	assert(familyIndex != VK_QUEUE_FAMILY_IGNORED);
+
 	VkDevice device = createDevice(instance, physicalDevice, familyIndex);
 	assert(device);
 
@@ -389,9 +587,6 @@ int main()
 	glfwGetWindowSize(window, &windowWidth, &windowHeight);
 
 	VkFormat swapchainFormat = getSwapchainFormat(physicalDevice, surface);
-
-	VkSwapchainKHR swapchain = createSwapchain(device, surface, familyIndex, swapchainFormat, windowWidth, windowHeight);
-	assert(swapchain);
 
 	VkSemaphore acquireSemaphore = createSemaphore(device);
 	assert(acquireSemaphore);
@@ -420,24 +615,8 @@ int main()
 	VkPipeline trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, triangleVS, triangleFS, triangleLayout);
 	assert(trianglePipeline);
 
-	VkImage swapchainImages[16];
-	uint32_t swapchainImageCount = sizeof(swapchainImages) / sizeof(swapchainImages[0]);
-	VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages));
-	VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, 0)); // TODO: workaround for Intel graphics driver bug; clean this up
-
-	VkImageView swapchainImageViews[16];
-	for (uint32_t i = 0; i < swapchainImageCount; ++i)
-	{
-		swapchainImageViews[i] = createImageView(device, swapchainImages[i], swapchainFormat);
-		assert(swapchainImageViews[i]);
-	}
-
-	VkFramebuffer swapchainFramebuffers[16];
-	for (uint32_t i = 0; i < swapchainImageCount; ++i)
-	{
-		swapchainFramebuffers[i] = createFramebuffer(device, renderPass, swapchainImageViews[i], windowWidth, windowHeight);
-		assert(swapchainFramebuffers[i]);
-	}
+	Swapchain swapchain;
+	createSwapchain(swapchain, physicalDevice, device, surface, familyIndex, swapchainFormat, windowWidth, windowHeight, renderPass);
 
 	VkCommandPool commandPool = createCommandPool(device, familyIndex);
 	assert(commandPool);
@@ -454,8 +633,10 @@ int main()
 	{
 		glfwPollEvents();
 
+		resizeSwapchainIfNecessary(swapchain, physicalDevice, device, surface, familyIndex, swapchainFormat, renderPass);
+
 		uint32_t imageIndex = 0;
-		VK_CHECK(vkAcquireNextImageKHR(device, swapchain, ~0ull, acquireSemaphore, VK_NULL_HANDLE, &imageIndex));
+		VK_CHECK(vkAcquireNextImageKHR(device, swapchain.swapchain, ~0ull, acquireSemaphore, VK_NULL_HANDLE, &imageIndex));
 
 		VK_CHECK(vkResetCommandPool(device, commandPool, 0));
 
@@ -464,21 +645,24 @@ int main()
 
 		VK_CHECK(vkBeginCommandBuffer(commandBuffer, &beginInfo));
 
+		VkImageMemoryBarrier renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderBeginBarrier);
+
 		VkClearColorValue color = { 48.f / 255.f, 10.f / 255.f, 36.f / 255.f, 1 };
 		VkClearValue clearColor = { color };
 
 		VkRenderPassBeginInfo passBeginInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
 		passBeginInfo.renderPass = renderPass;
-		passBeginInfo.framebuffer = swapchainFramebuffers[imageIndex];
-		passBeginInfo.renderArea.extent.width = windowWidth;
-		passBeginInfo.renderArea.extent.height = windowHeight;
+		passBeginInfo.framebuffer = swapchain.framebuffers[imageIndex];
+		passBeginInfo.renderArea.extent.width = swapchain.width;
+		passBeginInfo.renderArea.extent.height = swapchain.height;
 		passBeginInfo.clearValueCount = 1;
 		passBeginInfo.pClearValues = &clearColor;
 
 		vkCmdBeginRenderPass(commandBuffer, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-		VkViewport viewport = { 0, float(windowHeight), float(windowWidth), -float(windowHeight), 0, 1 };
-		VkRect2D scissor = { {0, 0}, {uint32_t(windowWidth), uint32_t(windowHeight)} };
+		VkViewport viewport = { 0, float(swapchain.height), float(swapchain.width), -float(swapchain.height), 0, 1 };
+		VkRect2D scissor = { {0, 0}, {uint32_t(swapchain.width), uint32_t(swapchain.height)} };
 
 		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
@@ -487,6 +671,9 @@ int main()
 		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
 		vkCmdEndRenderPass(commandBuffer);
+
+		VkImageMemoryBarrier renderEndBarrier = imageBarrier(swapchain.images[imageIndex], VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+		vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderEndBarrier);
 
 		VK_CHECK(vkEndCommandBuffer(commandBuffer));
 
@@ -501,21 +688,50 @@ int main()
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = &releaseSemaphore;
 
-		vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+		VK_CHECK(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
 		VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 		presentInfo.waitSemaphoreCount = 1;
 		presentInfo.pWaitSemaphores = &releaseSemaphore;
 		presentInfo.swapchainCount = 1;
-		presentInfo.pSwapchains = &swapchain;
+		presentInfo.pSwapchains = &swapchain.swapchain;
 		presentInfo.pImageIndices = &imageIndex;
 
 		VK_CHECK(vkQueuePresentKHR(queue, &presentInfo));
 
 		VK_CHECK(vkDeviceWaitIdle(device));
+
+		// TOOD: remove when we switch to the desktop computer
+		glfwWaitEvents();
 	}
 
+	VK_CHECK(vkDeviceWaitIdle(device));
+
+	vkDestroyCommandPool(device, commandPool, 0);
+
+	destroySwapchain(device, swapchain);
+
+	vkDestroyPipeline(device, trianglePipeline, 0);
+	vkDestroyPipelineLayout(device, triangleLayout, 0);
+
+	vkDestroyShaderModule(device, triangleFS, 0);
+	vkDestroyShaderModule(device, triangleVS, 0);
+
+	vkDestroyRenderPass(device, renderPass, 0);
+
+	vkDestroySemaphore(device, releaseSemaphore, 0);
+	vkDestroySemaphore(device, acquireSemaphore, 0);
+
+	vkDestroySurfaceKHR(instance, surface, 0);
+
 	glfwDestroyWindow(window);
+
+	vkDestroyDevice(device, 0);
+
+#ifdef _DEBUG
+	PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
+	vkDestroyDebugReportCallbackEXT(instance, debugCallback, 0);
+#endif
 
 	vkDestroyInstance(instance, 0);
 }
