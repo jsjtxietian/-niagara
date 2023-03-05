@@ -26,7 +26,7 @@ VkInstance createInstance()
 #ifdef _DEBUG
 	const char* debugLayers[] =
 	{
-		"VK_LAYER_KHRONOS_validation"
+		"VK_LAYER_LUNARG_standard_validation"
 	};
 
 	createInfo.ppEnabledLayerNames = debugLayers;
@@ -163,8 +163,7 @@ VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, uint32_t f
 	createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
 	VkSwapchainKHR swapchain = 0;
-	//VK_CHECK(vkCreateSwapchainKHR(device, &createInfo, 0, &swapchain));
-	vkCreateSwapchainKHR(device, &createInfo, 0, &swapchain);
+	VK_CHECK(vkCreateSwapchainKHR(device, &createInfo, 0, &swapchain));
 
 	return swapchain;
 }
