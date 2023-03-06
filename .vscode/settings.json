@@ -1,7 +1,0 @@
-{
-    "cmake.sourceDirectory": "${workspaceFolder}/.",
-    "files.associations": {
-        "xiosbase": "cpp",
-        "vector": "cpp"
-    }
-}
