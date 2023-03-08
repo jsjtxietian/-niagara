@@ -197,9 +197,12 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 
 	VkPhysicalDevice16BitStorageFeatures features16 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES };
 	features16.storageBuffer16BitAccess = true;
+	features16.uniformAndStorageBuffer16BitAccess = true;
 
 	VkPhysicalDevice8BitStorageFeaturesKHR features8 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR };
 	features8.storageBuffer8BitAccess = true;
+	features8.uniformAndStorageBuffer8BitAccess = true;
+
 
 	VkDeviceCreateInfo createInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 	createInfo.queueCreateInfoCount = 1;
@@ -423,7 +426,7 @@ VkPipelineLayout createPipelineLayout(VkDevice device)
 	VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));
 
 	// TODO: is this safe?
-	vkDestroyDescriptorSetLayout(device, setLayout, 0);
+	// vkDestroyDescriptorSetLayout(device, setLayout, 0);
 
 	return layout;
 }
@@ -819,9 +822,9 @@ int main(int argc, const char** argv)
 	bool rcm = loadMesh(mesh, argv[1]);
 
 	Buffer vb = {};
-	createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 	Buffer ib = {};
-	createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 	assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
 	memcpy(vb.data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
