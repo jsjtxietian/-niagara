@@ -10,9 +10,9 @@
 // https://www.khronos.org/registry/spir-v/specs/1.0/SPIRV.pdf
 struct Id
 {
-	enum Kind { Unknown, Variable };
+	enum Kind { Unknown = 0, Variable };
 
-	Kind kind = Unknown;
+	Kind kind;
 	uint32_t type;
 	uint32_t storageClass;
 	uint32_t binding;
@@ -146,11 +146,6 @@ bool loadShader(Shader& shader, VkDevice device, const char* path)
 	// shader.stage = ? ? ;
 
 	return true;
-}
-
-void destroyShader(Shader& shader, VkDevice device)
-{
-	vkDestroyShaderModule(device, shader.module, 0);
 }
 
 VkDescriptorSetLayout createSetLayout(VkDevice device, const Shader& vs, const Shader& fs)

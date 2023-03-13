@@ -5,11 +5,11 @@ struct Shader
 	VkShaderModule module;
 	VkShaderStageFlagBits stage;
 
+	// TODO: Replace with array of 32 descriptor types
 	uint32_t storageBufferMask;
 };
 
 bool loadShader(Shader& shader, VkDevice device, const char* path);
-void destroyShader(Shader& shader, VkDevice device);
 
 VkPipelineLayout createPipelineLayout(VkDevice device, const Shader& vs, const Shader& fs);
 VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, const Shader& vs, const Shader& fs);
