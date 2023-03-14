@@ -99,7 +99,7 @@ static void parseShader(Shader& shader, const uint32_t* code, uint32_t codeSize)
 
 	for (auto& id : ids)
 	{
-		if (id.kind == Id::Variable && id.storageClass == SpvStorageClassUniform)
+		if (id.kind == Id::Variable && (id.storageClass == SpvStorageClassUniform || id.storageClass == SpvStorageClassStorageBuffer))
 		{
 			// assume that id.type refers to a pointer to a storage buffer
 			assert(id.set == 0);
