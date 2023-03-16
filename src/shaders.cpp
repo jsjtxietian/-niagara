@@ -101,12 +101,16 @@ static void parseShader(Shader& shader, const uint32_t* code, uint32_t codeSize)
 	{
 		if (id.kind == Id::Variable && (id.storageClass == SpvStorageClassUniform || id.storageClass == SpvStorageClassStorageBuffer))
 		{
-			// assume that id.type refers to a pointer to a storage buffer
+			// TODO: we currently assume that id.type refers to a pointer to a storage buffer
 			assert(id.set == 0);
 			assert(id.binding < 32);
-			assert((shader.storageBufferMask & (1 << id.binding)) == 0);
 
 			shader.storageBufferMask |= 1 << id.binding;
+		}
+
+		if (id.kind == Id::Variable && id.storageClass == SpvStorageClassPushConstant)
+		{
+			shader.usesPushConstants = true;
 		}
 	}
 }
@@ -142,8 +146,6 @@ bool loadShader(Shader& shader, VkDevice device, const char* path)
 	delete[] buffer;
 
 	shader.module = shaderModule;
-
-	// shader.stage = ? ? ;
 
 	return true;
 }
@@ -183,13 +185,27 @@ VkDescriptorSetLayout createSetLayout(VkDevice device, Shaders shaders)
 	return setLayout;
 }
 
-VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders)
+VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders, size_t pushConstantSize)
 {
 	VkDescriptorSetLayout setLayout = createSetLayout(device, shaders);
 
 	VkPipelineLayoutCreateInfo createInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	createInfo.setLayoutCount = 1;
 	createInfo.pSetLayouts = &setLayout;
+
+	VkPushConstantRange pushConstantRange = {};
+
+	if (pushConstantSize)
+	{
+		for (const Shader* shader : shaders)
+			if (shader->usesPushConstants)
+				pushConstantRange.stageFlags |= shader->stage;
+
+		pushConstantRange.size = uint32_t(pushConstantSize);
+
+		createInfo.pushConstantRangeCount = 1;
+		createInfo.pPushConstantRanges = &pushConstantRange;
+	}
 
 	VkPipelineLayout layout = 0;
 	VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));

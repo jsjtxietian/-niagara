@@ -7,13 +7,15 @@ struct Shader
 
 	// TODO: Replace with array of 32 descriptor types
 	uint32_t storageBufferMask;
+
+	bool usesPushConstants;
 };
 
 bool loadShader(Shader& shader, VkDevice device, const char* path);
 
 using Shaders = std::initializer_list<const Shader*>;
 
-VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders);
+VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders, size_t pushConstantSize);
 VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device, VkPipelineBindPoint bindPoint, VkPipelineLayout layout, Shaders shaders);
 VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, Shaders shaders, VkPipelineLayout layout);
 
