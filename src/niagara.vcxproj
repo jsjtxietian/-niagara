@@ -105,7 +105,8 @@
       <Outputs>shaders/%(Filename).spv</Outputs>
     </CustomBuild>
     <CustomBuild>
-      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <AdditionalInputs>shaders/*.h</AdditionalInputs>
+      <BuildInParallel>true</BuildInParallel>
     </CustomBuild>
     <CustomBuild />
   </ItemDefinitionGroup>
@@ -132,7 +133,8 @@
       <Outputs>shaders/%(Filename).spv</Outputs>
     </CustomBuild>
     <CustomBuild>
-      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <AdditionalInputs>shaders/*.h</AdditionalInputs>
+      <BuildInParallel>true</BuildInParallel>
     </CustomBuild>
     <CustomBuild />
   </ItemDefinitionGroup>
@@ -163,7 +165,8 @@
       <Outputs>shaders/%(Filename).spv</Outputs>
     </CustomBuild>
     <CustomBuild>
-      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <AdditionalInputs>shaders/*.h</AdditionalInputs>
+      <BuildInParallel>true</BuildInParallel>
     </CustomBuild>
     <CustomBuild />
   </ItemDefinitionGroup>
@@ -194,7 +197,8 @@
       <Outputs>shaders/%(Filename).spv</Outputs>
     </CustomBuild>
     <CustomBuild>
-      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <AdditionalInputs>shaders/*.h</AdditionalInputs>
+      <BuildInParallel>true</BuildInParallel>
     </CustomBuild>
     <CustomBuild />
   </ItemDefinitionGroup>
