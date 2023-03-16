@@ -3,12 +3,9 @@ cmake_minimum_required(VERSION 3.0)
 
 option(BUILD_DEMO "Build demo" OFF)
 
-if(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX")
-endif(MSVC)
-
 set(SOURCES
     src/meshoptimizer.h
+    src/clusterizer.cpp
     src/indexcodec.cpp
     src/indexgenerator.cpp
     src/overdrawanalyzer.cpp
@@ -24,6 +21,12 @@ set(SOURCES
 
 add_library(meshoptimizer STATIC ${SOURCES})
 target_include_directories(meshoptimizer INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+if(MSVC)
+	target_compile_options(meshoptimizer PRIVATE /W4 /WX)
+else()
+	target_compile_options(meshoptimizer PRIVATE -Wall -Wextra -Werror)
+endif()
 
 if(BUILD_DEMO)
     add_executable(demo demo/main.cpp demo/miniz.cpp demo/objparser.cpp)

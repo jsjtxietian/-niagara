@@ -113,7 +113,6 @@ struct PositionHasher
 	}
 };
 
-// TODO: is there a better way to resolve naming conflicts with indexgenerator.cpp?
 static size_t hashBuckets2(size_t count)
 {
 	size_t buckets = 1;
@@ -123,7 +122,6 @@ static size_t hashBuckets2(size_t count)
 	return buckets;
 }
 
-// TODO: is there a better way to resolve naming conflicts with indexgenerator.cpp?
 template <typename T, typename Hash>
 static T* hashLookup2(T* table, size_t buckets, const Hash& hash, const T& key, const T& empty)
 {
@@ -207,8 +205,6 @@ enum VertexKind
 
 // manifold vertices can collapse on anything except locked
 // border/seam vertices can only be collapsed onto border/seam respectively
-// TODO: allow border->locked collapses? to make these work we might need to compute loop metadata for them? + audit all loop checks!
-// TODO: allow seam->locked collapses? to make these work we might need to compute loop metadata for them? + audit all loop checks!
 const char kCanCollapse[Kind_Count][Kind_Count] = {
     {1, 1, 1, 1},
     {0, 1, 0, 0},
@@ -272,7 +268,7 @@ static size_t countOpenEdges(const EdgeAdjacency& adjacency, unsigned int vertex
 	return result;
 }
 
-static void classifyVertices(unsigned char* result, unsigned int* loop, size_t vertex_count, const EdgeAdjacency& adjacency, const unsigned int* remap, const unsigned int* wedge, size_t lockedstats[4])
+static void classifyVertices(unsigned char* result, unsigned int* loop, size_t vertex_count, const EdgeAdjacency& adjacency, const unsigned int* remap, const unsigned int* wedge)
 {
 	for (size_t i = 0; i < vertex_count; ++i)
 		loop[i] = ~0u;
@@ -303,7 +299,7 @@ static void classifyVertices(unsigned char* result, unsigned int* loop, size_t v
 				}
 				else
 				{
-					result[i] = Kind_Locked, lockedstats[0]++;
+					result[i] = Kind_Locked;
 				}
 			}
 			else if (wedge[wedge[i]] == i)
@@ -317,8 +313,6 @@ static void classifyVertices(unsigned char* result, unsigned int* loop, size_t v
 				// seam should have one open half-edge for each vertex, and the edges need to "connect" - point to the same vertex post-remap
 				if (a_count == 1 && b_count == 1)
 				{
-					// TODO: if ao == a or bo == b, we have a seam that connects both vertex pairs to the same target vertex
-					// does this still mean the vertex can be a seam vertex?
 					unsigned int ao = findWedgeEdge(adjacency, wedge, a, wedge[i]);
 					unsigned int bo = findWedgeEdge(adjacency, wedge, b, unsigned(i));
 
@@ -331,18 +325,18 @@ static void classifyVertices(unsigned char* result, unsigned int* loop, size_t v
 					}
 					else
 					{
-						result[i] = Kind_Locked, lockedstats[1]++;
+						result[i] = Kind_Locked;
 					}
 				}
 				else
 				{
-					result[i] = Kind_Locked, lockedstats[2]++;
+					result[i] = Kind_Locked;
 				}
 			}
 			else
 			{
 				// more than one vertex maps to this one; we don't have classification available
-				result[i] = Kind_Locked, lockedstats[3]++;
+				result[i] = Kind_Locked;
 			}
 		}
 		else
@@ -551,11 +545,8 @@ static void fillFaceQuadrics(Quadric* vertex_quadrics, const unsigned int* indic
 	}
 }
 
-static size_t fillEdgeQuadrics(Quadric* vertex_quadrics, const unsigned int* indices, size_t index_count, const Vector3* vertex_positions, const unsigned int* remap, const unsigned char* vertex_kind, const unsigned int* loop)
+static void fillEdgeQuadrics(Quadric* vertex_quadrics, const unsigned int* indices, size_t index_count, const Vector3* vertex_positions, const unsigned int* remap, const unsigned char* vertex_kind, const unsigned int* loop)
 {
-	// TODO: remove when TRACE is removed
-	size_t boundary = 0;
-
 	for (size_t i = 0; i < index_count; i += 3)
 	{
 		static const int next[3] = {1, 2, 0};
@@ -565,28 +556,30 @@ static size_t fillEdgeQuadrics(Quadric* vertex_quadrics, const unsigned int* ind
 			unsigned int i0 = indices[i + e];
 			unsigned int i1 = indices[i + next[e]];
 
-			// TODO: if we extend loop[] to track locked vertices, we will need to check vertex_kind[i1] as well
-			if (vertex_kind[i0] != Kind_Border && vertex_kind[i0] != Kind_Seam)
-				continue;
+			unsigned char k0 = vertex_kind[i0];
+			unsigned char k1 = vertex_kind[i1];
 
-			if (loop[i0] != i1)
+			// check that i0 and i1 are border/seam and are on the same edge loop
+			// loop[] tracks half edges so we only need to check i0->i1
+			if (k0 != k1 || (k0 != Kind_Border && k0 != Kind_Seam) || loop[i0] != i1)
 				continue;
 
 			unsigned int i2 = indices[i + next[next[e]]];
 
-			float edgeWeight = vertex_kind[i0] == Kind_Seam ? 1.f : 10.f;
+			// we try hard to maintain border edge geometry; seam edges can move more freely
+			// due to topological restrictions on collapses, seam quadrics slightly improves collapse structure but aren't critical
+			const float kEdgeWeightSeam = 1.f;
+			const float kEdgeWeightBorder = 10.f;
+
+			float edgeWeight = (k0 == Kind_Seam) ? kEdgeWeightSeam : kEdgeWeightBorder;
 
 			Quadric Q;
 			quadricFromTriangleEdge(Q, vertex_positions[i0], vertex_positions[i1], vertex_positions[i2], edgeWeight);
 
 			quadricAdd(vertex_quadrics[remap[i0]], Q);
 			quadricAdd(vertex_quadrics[remap[i1]], Q);
-
-			boundary++;
 		}
 	}
-
-	return boundary;
 }
 
 static size_t pickEdgeCollapses(Collapse* collapses, const unsigned int* indices, size_t index_count, const unsigned int* remap, const unsigned char* vertex_kind, const unsigned int* loop)
@@ -602,7 +595,9 @@ static size_t pickEdgeCollapses(Collapse* collapses, const unsigned int* indices
 			unsigned int i0 = indices[i + e];
 			unsigned int i1 = indices[i + next[e]];
 
-			// TODO: i0==i1 is an interesting condition... it seems like it can arise when collapsing a seam loop
+			// this can happen either when input has a zero-length edge, or when we perform collapses for complex
+			// topology w/seams and collapse a manifold vertex that connects to both wedges onto one of them
+			// we leave edges like this alone since they may be important for preserving mesh integrity
 			if (remap[i0] == remap[i1])
 				continue;
 
@@ -619,10 +614,12 @@ static size_t pickEdgeCollapses(Collapse* collapses, const unsigned int* indices
 
 			// two vertices are on a border or a seam, but there's no direct edge between them
 			// this indicates that they belong to two different edge loops and we should not collapse this edge
-			if (k0 == k1 && (k0 == Kind_Border || k0 == Kind_Seam) && loop[i0] != i1 && loop[i1] != i0)
+			// loop[] tracks half edges so we only need to check i0->i1
+			if (k0 == k1 && (k0 == Kind_Border || k0 == Kind_Seam) && loop[i0] != i1)
 				continue;
 
-			// edge can be collapsed in either direction - pick the one with minimum error
+			// edge can be collapsed in either direction - we will pick the one with minimum error
+			// note: we evaluate error later during collapse ranking, here we just tag the edge as bidirectional
 			if (kCanCollapse[k0][k1] & kCanCollapse[k1][k0])
 			{
 				Collapse c = {i0, i1, {/* bidi= */ 1}};
@@ -753,16 +750,16 @@ static void sortEdgeCollapses(unsigned int* sort_order, const Collapse* collapse
 	// compute sort order based on offsets
 	for (size_t i = 0; i < collapse_count; ++i)
 	{
+		// skip sign bit since error is non-negative
 		unsigned int key = (collapses[i].errorui << 1) >> (32 - sort_bits);
 
 		sort_order[histogram[key]++] = unsigned(i);
 	}
 }
 
-static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* collapse_locked, Quadric* vertex_quadrics, const Collapse* collapses, size_t collapse_count, const unsigned int* collapse_order, const unsigned int* remap, const unsigned int* wedge, const unsigned char* vertex_kind, size_t triangle_collapse_goal, float error_limit, float& pass_error)
+static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* collapse_locked, Quadric* vertex_quadrics, const Collapse* collapses, size_t collapse_count, const unsigned int* collapse_order, const unsigned int* remap, const unsigned int* wedge, const unsigned char* vertex_kind, size_t triangle_collapse_goal, float error_limit)
 {
-	// TODO: remove this when TRACE is removed
-	size_t pass_collapses = 0;
+	size_t edge_collapses = 0;
 	size_t triangle_collapses = 0;
 
 	for (size_t i = 0; i < collapse_count; ++i)
@@ -778,13 +775,15 @@ static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* 
 		unsigned int r0 = remap[c.v0];
 		unsigned int r1 = remap[c.v1];
 
+		// we don't collapse vertices that had source or target vertex involved in a collapse
+		// it's important to not move the vertices twice since it complicates the tracking/remapping logic
+		// it's important to not move other vertices towards a moved vertex to preserve error since we don't re-rank collapses mid-pass
 		if (collapse_locked[r0] | collapse_locked[r1])
 			continue;
 
 		assert(collapse_remap[r0] == r0);
 		assert(collapse_remap[r1] == r1);
 
-		// TODO: this artificially magnifies future error with each collapse even for coplanar triangles
 		quadricAdd(vertex_quadrics[r1], vertex_quadrics[r0]);
 
 		if (vertex_kind[c.v0] == Kind_Seam)
@@ -794,6 +793,7 @@ static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* 
 			unsigned int s1 = wedge[c.v1];
 
 			assert(s0 != c.v0 && s1 != c.v1);
+			assert(wedge[s0] == c.v0 && wedge[s1] == c.v1);
 
 			collapse_remap[c.v0] = c.v1;
 			collapse_remap[s0] = s1;
@@ -810,12 +810,10 @@ static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* 
 
 		// border edges collapse 1 triangle, other edges collapse 2 or more
 		triangle_collapses += (vertex_kind[c.v0] == Kind_Border) ? 1 : 2;
-
-		pass_collapses++;
-		pass_error = c.error;
+		edge_collapses++;
 	}
 
-	return pass_collapses;
+	return edge_collapses;
 }
 
 static size_t remapIndexBuffer(unsigned int* indices, size_t index_count, const unsigned int* collapse_remap)
@@ -828,6 +826,7 @@ static size_t remapIndexBuffer(unsigned int* indices, size_t index_count, const 
 		unsigned int v1 = collapse_remap[indices[i + 1]];
 		unsigned int v2 = collapse_remap[indices[i + 2]];
 
+		// we never move the vertex twice during a single pass
 		assert(collapse_remap[v0] == v0);
 		assert(collapse_remap[v1] == v1);
 		assert(collapse_remap[v2] == v2);
@@ -861,9 +860,10 @@ static void remapEdgeLoops(unsigned int* loop, size_t vertex_count, const unsign
 
 } // namespace meshopt
 
-// TODO: this is necessary for lodviewer but will go away at some point
+#if TRACE
 unsigned char* meshopt_simplifyDebugKind = 0;
 unsigned int* meshopt_simplifyDebugLoop = 0;
+#endif
 
 size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, size_t index_count, const float* vertex_positions_data, size_t vertex_count, size_t vertex_positions_stride, size_t target_index_count, float target_error)
 {
@@ -885,16 +885,10 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 	meshopt_Buffer<unsigned int> wedge(vertex_count);
 	buildPositionRemap(remap.data, wedge.data, vertex_positions_data, vertex_count, vertex_positions_stride);
 
-	// TODO: maybe make this an option? this disables seam awareness
-	// for (size_t i = 0; i < vertex_count; ++i) remap[i] = wedge[i] = unsigned(i);
-
-	// TODO: remove this when TRACE is removed
-	size_t lockedstats[4] = {};
-
 	// classify vertices; vertex kind determines collapse rules, see kCanCollapse
 	meshopt_Buffer<unsigned char> vertex_kind(vertex_count);
 	meshopt_Buffer<unsigned int> loop(vertex_count);
-	classifyVertices(vertex_kind.data, loop.data, vertex_count, adjacency, remap.data, wedge.data, lockedstats);
+	classifyVertices(vertex_kind.data, loop.data, vertex_count, adjacency, remap.data, wedge.data);
 
 #if TRACE
 	size_t unique_positions = 0;
@@ -909,8 +903,6 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 
 	printf("kinds: manifold %d, border %d, seam %d, locked %d\n",
 	       int(kinds[Kind_Manifold]), int(kinds[Kind_Border]), int(kinds[Kind_Seam]), int(kinds[Kind_Locked]));
-	printf("locked: 0 %d, 1 %d, 2 %d, 3 %d\n",
-	       int(lockedstats[0]), int(lockedstats[1]), int(lockedstats[2]), int(lockedstats[3]));
 #endif
 
 	meshopt_Buffer<Vector3> vertex_positions(vertex_count);
@@ -920,19 +912,15 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 	memset(vertex_quadrics.data, 0, vertex_count * sizeof(Quadric));
 
 	fillFaceQuadrics(vertex_quadrics.data, indices, index_count, vertex_positions.data, remap.data);
-
-	size_t boundary = fillEdgeQuadrics(vertex_quadrics.data, indices, index_count, vertex_positions.data, remap.data, vertex_kind.data, loop.data);
-	(void)boundary;
-
-#if TRACE
-	printf("vertices: %d, half-edges: %d, boundary: %d\n", int(vertex_count), int(index_count), int(boundary));
-#endif
+	fillEdgeQuadrics(vertex_quadrics.data, indices, index_count, vertex_positions.data, remap.data, vertex_kind.data, loop.data);
 
 	if (result != indices)
 		memcpy(result, indices, index_count * sizeof(unsigned int));
 
+#if TRACE
 	size_t pass_count = 0;
 	float worst_error = 0;
+#endif
 
 	meshopt_Buffer<Collapse> edge_collapses(index_count);
 	meshopt_Buffer<unsigned int> collapse_order(index_count);
@@ -974,15 +962,11 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 
 		memset(collapse_locked.data, 0, vertex_count);
 
-		float pass_error = 0;
-		size_t collapses = performEdgeCollapses(collapse_remap.data, collapse_locked.data, vertex_quadrics.data, edge_collapses.data, edge_collapse_count, collapse_order.data, remap.data, wedge.data, vertex_kind.data, triangle_collapse_goal, error_limit, pass_error);
+		size_t collapses = performEdgeCollapses(collapse_remap.data, collapse_locked.data, vertex_quadrics.data, edge_collapses.data, edge_collapse_count, collapse_order.data, remap.data, wedge.data, vertex_kind.data, triangle_collapse_goal, error_limit);
 
 		// no edges can be collapsed any more due to hitting the error limit or triangle collapse limit
 		if (collapses == 0)
 			break;
-
-		pass_count++;
-		worst_error = (worst_error < pass_error) ? pass_error : worst_error;
 
 		remapEdgeLoops(loop.data, vertex_count, collapse_remap.data);
 
@@ -990,6 +974,18 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 		assert(new_count < result_count);
 
 #if TRACE
+		float pass_error = 0.f;
+		for (size_t i = 0; i < edge_collapse_count; ++i)
+		{
+			Collapse& c = edge_collapses[collapse_order[i]];
+
+			if (collapse_remap[c.v0] == c.v1)
+				pass_error = c.error;
+		}
+
+		pass_count++;
+		worst_error = (worst_error < pass_error) ? pass_error : worst_error;
+
 		printf("pass %d: triangles: %d -> %d, collapses: %d/%d (goal: %d), error: %e (limit %e goal %e)\n", int(pass_count), int(result_count / 3), int(new_count / 3), int(collapses), int(edge_collapse_count), int(edge_collapse_goal), pass_error, error_limit, error_goal);
 #endif
 
@@ -1004,11 +1000,13 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
 	dumpLockedCollapses(result, result_count, vertex_kind.data);
 #endif
 
+#if TRACE
 	if (meshopt_simplifyDebugKind)
 		memcpy(meshopt_simplifyDebugKind, vertex_kind.data, vertex_count);
 
 	if (meshopt_simplifyDebugLoop)
 		memcpy(meshopt_simplifyDebugLoop, loop.data, vertex_count * sizeof(unsigned int));
+#endif
 
 	return result_count;
 }

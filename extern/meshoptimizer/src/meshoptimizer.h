@@ -19,6 +19,9 @@
 #define MESHOPTIMIZER_API
 #endif
 
+/* Experimental APIs have unstable interface and might have implementation that's not fully tested or optimized */
+#define MESHOPTIMIZER_EXPERIMENTAL MESHOPTIMIZER_API
+
 /* C interface */
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +84,7 @@ MESHOPTIMIZER_API void meshopt_optimizeOverdraw(unsigned int* destination, const
 /**
  * Vertex fetch cache optimizer
  * Generates vertex remap to reduce the amount of GPU memory fetches during vertex processing
+ * Returns the number of unique vertices, which is the same as input vertex count unless some vertices are unused
  * The resulting remap table should be used to reorder vertex/index buffers using meshopt_remapVertexBuffer/meshopt_remapIndexBuffer
  *
  * destination must contain enough space for the resulting remap table (vertex_count elements)
@@ -90,6 +94,7 @@ MESHOPTIMIZER_API size_t meshopt_optimizeVertexFetchRemap(unsigned int* destinat
 /**
  * Vertex fetch cache optimizer
  * Reorders vertices and changes indices to reduce the amount of GPU memory fetches during vertex processing
+ * Returns the number of unique vertices, which is the same as input vertex count unless some vertices are unused
  *
  * destination must contain enough space for the resulting vertex buffer (vertex_count elements)
  * indices is used both as an input and as an output index buffer
@@ -143,7 +148,7 @@ MESHOPTIMIZER_API int meshopt_decodeVertexBuffer(void* destination, size_t verte
  * destination must contain enough space for the source index buffer (since optimization is iterative, this means index_count elements - *not* target_index_count!)
  * vertex_positions should have float3 position in the first 12 bytes of each vertex - similar to glVertexPointer
  */
-MESHOPTIMIZER_API size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, size_t index_count, const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride, size_t target_index_count, float target_error);
+MESHOPTIMIZER_EXPERIMENTAL size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, size_t index_count, const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride, size_t target_index_count, float target_error);
 
 /**
  * Mesh stripifier
@@ -151,18 +156,20 @@ MESHOPTIMIZER_API size_t meshopt_simplify(unsigned int* destination, const unsig
  * Returns the number of indices in the resulting strip, with destination containing new index data
  * For maximum efficiency the index buffer being converted has to be optimized for vertex cache first.
  *
- * destination must contain enough space for the worst case target index buffer (index_count / 3 * 4 elements)
+ * destination must contain enough space for the target index buffer, worst case can be computed with meshopt_stripifyBound
  */
 MESHOPTIMIZER_API size_t meshopt_stripify(unsigned int* destination, const unsigned int* indices, size_t index_count, size_t vertex_count);
+MESHOPTIMIZER_API size_t meshopt_stripifyBound(size_t index_count);
 
 /**
  * Mesh unstripifier
  * Converts a triangle strip to a triangle list
  * Returns the number of indices in the resulting list, with destination containing new index data
  *
- * destination must contain enough space for the worst case target index buffer ((index_count - 2) * 3 elements)
+ * destination must contain enough space for the target index buffer, worst case can be computed with meshopt_unstripifyBound
  */
 MESHOPTIMIZER_API size_t meshopt_unstripify(unsigned int* destination, const unsigned int* indices, size_t index_count);
+MESHOPTIMIZER_API size_t meshopt_unstripifyBound(size_t index_count);
 
 struct meshopt_VertexCacheStatistics
 {
@@ -207,6 +214,66 @@ struct meshopt_VertexFetchStatistics
  * Results may not match actual GPU performance
  */
 MESHOPTIMIZER_API struct meshopt_VertexFetchStatistics meshopt_analyzeVertexFetch(const unsigned int* indices, size_t index_count, size_t vertex_count, size_t vertex_size);
+
+struct meshopt_Meshlet
+{
+	unsigned int vertices[64];
+	unsigned char indices[126][3];
+	unsigned char triangle_count;
+	unsigned char vertex_count;
+};
+
+/**
+ * Experimental: Meshlet builder
+ * Splits the mesh into a set of meshlets where each meshlet has a micro index buffer indexing into meshlet vertices that refer to the original vertex buffer
+ * The resulting data can be used to render meshes using NVidia programmable mesh shading pipeline, or in other cluster-based renderers.
+ * For maximum efficiency the index buffer being converted has to be optimized for vertex cache first.
+ *
+ * destination must contain enough space for all meshlets, worst case size can be computed with meshopt_buildMeshletsBound
+ * max_vertices and max_triangles can't exceed limits statically declared in meshopt_Meshlet
+ */
+MESHOPTIMIZER_EXPERIMENTAL size_t meshopt_buildMeshlets(struct meshopt_Meshlet* destination, const unsigned int* indices, size_t index_count, size_t vertex_count, size_t max_vertices, size_t max_triangles);
+MESHOPTIMIZER_EXPERIMENTAL size_t meshopt_buildMeshletsBound(size_t index_count, size_t max_vertices, size_t max_triangles);
+
+struct meshopt_Bounds
+{
+	/* bounding sphere, useful for frustum and occlusion culling */
+	float center[3];
+	float radius;
+
+	/* normal cone, useful for backface culling */
+	float cone_apex[3];
+	float cone_axis[3];
+	float cone_cutoff; /* = cos(angle/2) */
+
+	/* normal cone axis and cutoff, stored in 8-bit SNORM format; decode using x/127.0 */
+	char cone_axis_s8[3];
+	char cone_cutoff_s8;
+};
+
+/**
+ * Experimental: Cluster bounds generator
+ * Creates bounding volumes that can be used for frustum, backface and occlusion culling.
+ *
+ * For backface culling with orthographic projection, use the following formula:
+ *   dot(view, cone_axis) > cone_cutoff
+ *
+ * For perspective projection, you can the formula that needs cone apex in addition to axis & cutoff:
+ *   dot(normalize(cone_apex - camera_position), cone_axis) > cone_cutoff
+ *
+ * Alternatively, you can use the formula that doesn't need cone apex and uses bounding sphere instead:
+ *   dot(normalize(center - camera_position), cone_axis) > cone_cutoff + radius / length(center - camera_position)
+ * or an equivalent formula that doesn't have a singularity at center = camera_position:
+ *   dot(center - camera_position, cone_axis) > cone_cutoff * length(center - camera_position) + radius
+ *
+ * The formula that uses the apex is slightly more accurate but needs the apex; if you are already using bounding sphere
+ * to do frustum/occlusion culling, the formula that doesn't use the apex may be preferable.
+ *
+ * vertex_positions should have float3 position in the first 12 bytes of each vertex - similar to glVertexPointer
+ */
+MESHOPTIMIZER_EXPERIMENTAL struct meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t index_count, const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride);
+MESHOPTIMIZER_EXPERIMENTAL struct meshopt_Bounds meshopt_computeMeshletBounds(const struct meshopt_Meshlet* meshlet, const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride);
+
 
 #ifdef __cplusplus
 } /* extern "C" */
