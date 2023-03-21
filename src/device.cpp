@@ -70,8 +70,8 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 //	OutputDebugStringA(message);
 //#endif
 
-	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-		assert(!"Validation error encountered!");
+	/*if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		assert(!"Validation error encountered!");*/
 
 	return VK_FALSE;
 }
@@ -187,16 +187,17 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 
 	VkPhysicalDevice16BitStorageFeatures features16 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES };
 	features16.storageBuffer16BitAccess = true;
-	features16.uniformAndStorageBuffer16BitAccess = true;
 
 	VkPhysicalDevice8BitStorageFeaturesKHR features8 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR };
 	features8.storageBuffer8BitAccess = true;
-	features8.uniformAndStorageBuffer8BitAccess = true;
 
 	// This will only be used if meshShadingSupported=true (see below)
 	VkPhysicalDeviceMeshShaderFeaturesNV featuresMesh = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV };
 	featuresMesh.taskShader = true;
 	featuresMesh.meshShader = true;
+
+	//VkPhysicalDeviceShaderDrawParametersFeatures featuresDrawPara = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
+	//featuresDrawPara.shaderDrawParameters = true;
 
 	VkDeviceCreateInfo createInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 	createInfo.queueCreateInfoCount = 1;
@@ -208,6 +209,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	createInfo.pNext = &features;
 	features.pNext = &features16;
 	features16.pNext = &features8;
+	//features8.pNext = &featuresDrawPara;
 
 	if (meshShadingSupported)
 		features8.pNext = &featuresMesh;
