@@ -47,6 +47,24 @@
     <ClInclude Include="swapchain.h" />
     <ClInclude Include="device.h" />
     <ClInclude Include="resources.h" />
+    <ClInclude Include="..\extern\glfw\src\internal.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\extern\glfw\src\null_joystick.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\extern\glfw\src\null_platform.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\extern\glfw\src\win32_thread.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\extern\glfw\src\win32_time.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\extern\glfw\src\platform.h">
+      <Filter>glfw</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\extern\glfw\src\context.c">
@@ -141,6 +159,24 @@
     <ClCompile Include="swapchain.cpp" />
     <ClCompile Include="device.cpp" />
     <ClCompile Include="resources.cpp" />
+    <ClCompile Include="..\extern\glfw\src\null_init.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\extern\glfw\src\null_joystick.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\extern\glfw\src\null_monitor.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\extern\glfw\src\null_window.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\extern\glfw\src\win32_module.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\extern\glfw\src\platform.c">
+      <Filter>glfw</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="shaders\meshlet.mesh.glsl">
@@ -153,6 +189,9 @@
       <Filter>shaders</Filter>
     </CustomBuild>
     <CustomBuild Include="shaders\meshlet.task.glsl">
+      <Filter>shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="shaders\drawcmd.comp.glsl">
       <Filter>shaders</Filter>
     </CustomBuild>
   </ItemGroup>

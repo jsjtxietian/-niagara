@@ -69,9 +69,9 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 //#ifdef _WIN32
 //	OutputDebugStringA(message);
 //#endif
-
-	/*if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-		assert(!"Validation error encountered!");*/
+//
+//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+//		assert(!"Validation error encountered!");
 
 	return VK_FALSE;
 }
@@ -196,9 +196,6 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	featuresMesh.taskShader = true;
 	featuresMesh.meshShader = true;
 
-	//VkPhysicalDeviceShaderDrawParametersFeatures featuresDrawPara = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
-	//featuresDrawPara.shaderDrawParameters = true;
-
 	VkDeviceCreateInfo createInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 	createInfo.queueCreateInfoCount = 1;
 	createInfo.pQueueCreateInfos = &queueInfo;
@@ -209,7 +206,6 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	createInfo.pNext = &features;
 	features.pNext = &features16;
 	features16.pNext = &features8;
-	//features8.pNext = &featuresDrawPara;
 
 	if (meshShadingSupported)
 		features8.pNext = &featuresMesh;
