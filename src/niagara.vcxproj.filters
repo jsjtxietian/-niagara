@@ -47,6 +47,7 @@
     <ClInclude Include="swapchain.h" />
     <ClInclude Include="device.h" />
     <ClInclude Include="resources.h" />
+    <ClInclude Include="math.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\extern\glfw\src\context.c">
