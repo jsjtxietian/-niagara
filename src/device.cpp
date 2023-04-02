@@ -60,7 +60,7 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 			: "INFO";
 
 	char message[4096];
-	snprintf(message, ARRAYSIZE(message), "%s: %s\n", type, pMessage);
+	snprintf(message, COUNTOF(message), "%s: %s\n", type, pMessage);
 
 	printf("%s", message);
 
@@ -68,7 +68,7 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	OutputDebugStringA(message);
 #endif
 
-	//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
 //		assert(!"Validation error encountered!");
 
 	return VK_FALSE;
