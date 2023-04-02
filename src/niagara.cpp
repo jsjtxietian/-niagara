@@ -206,6 +206,8 @@ struct alignas(16) DrawCullData
 	int cullingEnabled;
 	int lodEnabled;
 	int occlusionEnabled;
+
+	int lateWorkaroundAMD;
 };
 
 struct alignas(16) DepthReduceData
@@ -782,7 +784,7 @@ int main(int argc, const char** argv)
 			VK_CHECKPOINT("dvb cleared");
 		}
 
-		float znear = 0.01f;
+		float znear = 0.5f;
 		mat4 projection = perspectiveProjection(glm::radians(70.f), float(swapchain.width) / float(swapchain.height), znear);
 
 		mat4 projectionT = transpose(projection);
@@ -1044,6 +1046,7 @@ int main(int argc, const char** argv)
 		VK_CHECKPOINT("frame");
 
 		// early cull: frustum cull & fill objects that *were* visible last frame
+		cullData.lateWorkaroundAMD = 0;
 		cull(drawcullPipeline, 2, "early cull");
 
 		// early render: render objects that were visible last frame
@@ -1053,6 +1056,7 @@ int main(int argc, const char** argv)
 		pyramid();
 
 		// late cull: frustum + occlusion cull & fill objects that were *not* visible last frame
+		cullData.lateWorkaroundAMD = 1;
 		cull(drawculllatePipeline, 6, "late cull");
 
 		// late render: render objects that are visible this frame but weren't drawn in the early pass

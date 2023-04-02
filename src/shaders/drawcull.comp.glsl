@@ -7,7 +7,13 @@
 
 #include "mesh.h"
 
+#if 0
+// Note: this should work, but unfortunately on AMD drivers it doesn't :(
+// Because of this, we use the workaround where instead of a spec constant we use a uniform
 layout (constant_id = 0) const bool LATE = false;
+#else
+#define LATE cullData.lateWorkaroundAMD
+#endif
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -61,6 +67,7 @@ bool projectSphere(vec3 C, float r, float znear, float P00, float P11, out vec4 
 
 	aabb = vec4(minx.x / minx.y * P00, miny.x / miny.y * P11, maxx.x / maxx.y * P00, maxy.x / maxy.y * P11);
 	aabb = aabb.xwzy * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f); // clip space -> uv space
+
 	return true;
 }
 
