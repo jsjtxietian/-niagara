@@ -370,7 +370,7 @@ bool loadMesh(Geometry& result, const char* path, bool buildMeshlets)
 		if (mesh.lodCount < ARRAYSIZE(mesh.lods))
 		{
 			size_t nextIndicesTarget = size_t(double(lodIndices.size()) * 0.75);
-			size_t nextIndices = meshopt_simplify(lodIndices.data(), lodIndices.data(), lodIndices.size(), &vertices[0].vx, vertices.size(), sizeof(Vertex), nextIndicesTarget, 1e-4f);
+			size_t nextIndices = meshopt_simplify(lodIndices.data(), lodIndices.data(), lodIndices.size(), &vertices[0].vx, vertices.size(), sizeof(Vertex), nextIndicesTarget, 1e-2f);
 			assert(nextIndices <= lodIndices.size());
 
 			// we've reached the error bound
