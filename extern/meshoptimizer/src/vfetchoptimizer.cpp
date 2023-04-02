@@ -33,19 +33,19 @@ size_t meshopt_optimizeVertexFetch(void* destination, unsigned int* indices, siz
 	assert(index_count % 3 == 0);
 	assert(vertex_size > 0 && vertex_size <= 256);
 
-	// support in-place optimization
-	meshopt_Buffer<char> vertices_copy;
+	meshopt_Allocator allocator;
 
+	// support in-place optimization
 	if (destination == vertices)
 	{
-		vertices_copy.allocate(vertex_count * vertex_size);
-		memcpy(vertices_copy.data, vertices, vertex_count * vertex_size);
-		vertices = vertices_copy.data;
+		unsigned char* vertices_copy = allocator.allocate<unsigned char>(vertex_count * vertex_size);
+		memcpy(vertices_copy, vertices, vertex_count * vertex_size);
+		vertices = vertices_copy;
 	}
 
 	// build vertex remap table
-	meshopt_Buffer<unsigned int> vertex_remap(vertex_count);
-	memset(vertex_remap.data, -1, vertex_count * sizeof(unsigned int));
+	unsigned int* vertex_remap = allocator.allocate<unsigned int>(vertex_count);
+	memset(vertex_remap, -1, vertex_count * sizeof(unsigned int));
 
 	unsigned int next_vertex = 0;
 
@@ -59,7 +59,7 @@ size_t meshopt_optimizeVertexFetch(void* destination, unsigned int* indices, siz
 		if (remap == ~0u) // vertex was not added to destination VB
 		{
 			// add vertex
-			memcpy(static_cast<char*>(destination) + next_vertex * vertex_size, static_cast<const char*>(vertices) + index * vertex_size, vertex_size);
+			memcpy(static_cast<unsigned char*>(destination) + next_vertex * vertex_size, static_cast<const unsigned char*>(vertices) + index * vertex_size, vertex_size);
 
 			remap = next_vertex++;
 		}

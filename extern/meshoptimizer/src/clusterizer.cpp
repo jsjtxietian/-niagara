@@ -14,6 +14,8 @@ namespace meshopt
 
 static void computeBoundingSphere(float result[4], const float points[][3], size_t count)
 {
+	assert(count > 0);
+
 	// find extremum points along all 3 axes; for each axis we get a pair of points with min/max coordinates
 	size_t pmin[3] = {0, 0, 0};
 	size_t pmax[3] = {0, 0, 0};
@@ -104,6 +106,8 @@ size_t meshopt_buildMeshlets(meshopt_Meshlet* destination, const unsigned int* i
 	assert(max_vertices >= 3);
 	assert(max_triangles >= 1);
 
+	meshopt_Allocator allocator;
+
 	meshopt_Meshlet meshlet;
 	memset(&meshlet, 0, sizeof(meshlet));
 
@@ -111,8 +115,8 @@ size_t meshopt_buildMeshlets(meshopt_Meshlet* destination, const unsigned int* i
 	assert(max_triangles <= sizeof(meshlet.indices) / 3);
 
 	// index of the vertex in the meshlet, 0xff if the vertex isn't used
-	meshopt_Buffer<unsigned char> used(vertex_count);
-	memset(used.data, -1, vertex_count);
+	unsigned char* used = allocator.allocate<unsigned char>(vertex_count);
+	memset(used, -1, vertex_count);
 
 	size_t offset = 0;
 
@@ -179,14 +183,16 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 
 	assert(index_count / 3 <= 256);
 
+	(void)vertex_count;
+
 	size_t vertex_stride_float = vertex_positions_stride / sizeof(float);
 
 	// compute triangle normals and gather triangle corners
 	float normals[256][3];
 	float corners[256][3][3];
-	unsigned int triangles = 0;
+	size_t triangles = 0;
 
-	for (unsigned int i = 0; i < index_count; i += 3)
+	for (size_t i = 0; i < index_count; i += 3)
 	{
 		unsigned int a = indices[i + 0], b = indices[i + 1], c = indices[i + 2];
 		assert(a < vertex_count && b < vertex_count && c < vertex_count);
@@ -218,6 +224,12 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 		triangles++;
 	}
 
+	meshopt_Bounds bounds = {};
+
+	// degenerate cluster, no valid triangles => trivial reject (cone data is 0)
+	if (triangles == 0)
+		return bounds;
+
 	// compute cluster bounding sphere; we'll use the center to determine normal cone apex as well
 	float psphere[4] = {};
 	computeBoundingSphere(psphere, corners[0], triangles * 3);
@@ -239,25 +251,23 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 	// compute a tight cone around all normals, mindp = cos(angle/2)
 	float mindp = 1.f;
 
-	for (unsigned int i = 0; i < triangles; ++i)
+	for (size_t i = 0; i < triangles; ++i)
 	{
 		float dp = normals[i][0] * axis[0] + normals[i][1] * axis[1] + normals[i][2] * axis[2];
 
 		mindp = (dp < mindp) ? dp : mindp;
 	}
 
-	// prepare bounds with the bounding sphere; note that below we can return bounds without cone information for degenerate cones
-	meshopt_Bounds bounds = {};
-
+	// fill bounding sphere info; note that below we can return bounds without cone information for degenerate cones
 	bounds.center[0] = center[0];
 	bounds.center[1] = center[1];
 	bounds.center[2] = center[2];
 	bounds.radius = psphere[3];
 
-	// degenerate cluster, no valid triangles or normal cone is larger than a hemisphere
+	// degenerate cluster, normal cone is larger than a hemisphere => trivial accept
 	// note that if mindp is positive but close to 0, the triangle intersection code below gets less stable
 	// we arbitrarily decide that if a normal cone is ~168 degrees wide or more, the cone isn't useful
-	if (triangles == 0 || mindp <= 0.1f)
+	if (mindp <= 0.1f)
 	{
 		bounds.cone_cutoff = 1;
 		bounds.cone_cutoff_s8 = 127;
@@ -267,7 +277,7 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 	float maxt = 0;
 
 	// we need to find the point on center-t*axis ray that lies in negative half-space of all triangles
-	for (unsigned int i = 0; i < triangles; ++i)
+	for (size_t i = 0; i < triangles; ++i)
 	{
 		// dot(center-t*axis-corner, trinormal) = 0
 		// dot(center-corner, trinormal) - t * dot(axis, trinormal) = 0
@@ -300,9 +310,9 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 	bounds.cone_cutoff = sqrtf(1 - mindp * mindp);
 
 	// quantize axis & cutoff to 8-bit SNORM format
-	bounds.cone_axis_s8[0] = char(meshopt_quantizeSnorm(bounds.cone_axis[0], 8));
-	bounds.cone_axis_s8[1] = char(meshopt_quantizeSnorm(bounds.cone_axis[1], 8));
-	bounds.cone_axis_s8[2] = char(meshopt_quantizeSnorm(bounds.cone_axis[2], 8));
+	bounds.cone_axis_s8[0] = (signed char)(meshopt_quantizeSnorm(bounds.cone_axis[0], 8));
+	bounds.cone_axis_s8[1] = (signed char)(meshopt_quantizeSnorm(bounds.cone_axis[1], 8));
+	bounds.cone_axis_s8[2] = (signed char)(meshopt_quantizeSnorm(bounds.cone_axis[2], 8));
 
 	// for the 8-bit test to be conservative, we need to adjust the cutoff by measuring the max. error
 	float cone_axis_s8_e0 = fabsf(bounds.cone_axis_s8[0] / 127.f - bounds.cone_axis[0]);
@@ -312,7 +322,7 @@ meshopt_Bounds meshopt_computeClusterBounds(const unsigned int* indices, size_t 
 	// note that we need to round this up instead of rounding to nearest, hence +1
 	int cone_cutoff_s8 = int(127 * (bounds.cone_cutoff + cone_axis_s8_e0 + cone_axis_s8_e1 + cone_axis_s8_e2) + 1);
 
-	bounds.cone_cutoff_s8 = (cone_cutoff_s8 > 127) ? 127 : char(cone_cutoff_s8);
+	bounds.cone_cutoff_s8 = (cone_cutoff_s8 > 127) ? 127 : (signed char)(cone_cutoff_s8);
 
 	return bounds;
 }
@@ -324,7 +334,7 @@ meshopt_Bounds meshopt_computeMeshletBounds(const meshopt_Meshlet* meshlet, cons
 
 	unsigned int indices[sizeof(meshlet->indices) / sizeof(meshlet->indices[0][0])];
 
-	for (unsigned int i = 0; i < meshlet->triangle_count; ++i)
+	for (size_t i = 0; i < meshlet->triangle_count; ++i)
 	{
 		unsigned int a = meshlet->vertices[meshlet->indices[i][0]];
 		unsigned int b = meshlet->vertices[meshlet->indices[i][1]];

@@ -1,7 +1,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "../demo/objparser.h"
 #include "../src/meshoptimizer.h"
+#include "fast_obj.h"
+#include "cgltf.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,11 @@
 
 extern unsigned char* meshopt_simplifyDebugKind;
 extern unsigned int* meshopt_simplifyDebugLoop;
+
+#ifndef TRACE
+unsigned char* meshopt_simplifyDebugKind;
+unsigned int* meshopt_simplifyDebugLoop;
+#endif
 
 struct Options
 {
@@ -50,40 +56,57 @@ struct Mesh
 
 Mesh parseObj(const char* path)
 {
-	ObjFile file;
-
-	if (!objParseFile(file, path) || !objValidate(file))
+	fastObjMesh* obj = fast_obj_read(path);
+	if (!obj)
 	{
-		printf("Error loading %s\n", path);
+		printf("Error loading %s: file not found\n", path);
 		return Mesh();
 	}
 
-	size_t total_indices = file.f_size / 3;
+	size_t total_indices = 0;
+
+	for (unsigned int i = 0; i < obj->face_count; ++i)
+		total_indices += 3 * (obj->face_vertices[i] - 2);
 
 	std::vector<Vertex> vertices(total_indices);
 
-	for (size_t i = 0; i < total_indices; ++i)
+	size_t vertex_offset = 0;
+	size_t index_offset = 0;
+
+	for (unsigned int i = 0; i < obj->face_count; ++i)
 	{
-		int vi = file.f[i * 3 + 0];
-		int vti = file.f[i * 3 + 1];
-		int vni = file.f[i * 3 + 2];
+		for (unsigned int j = 0; j < obj->face_vertices[i]; ++j)
+		{
+			fastObjIndex gi = obj->indices[index_offset + j];
 
-		Vertex v =
-		    {
-		        file.v[vi * 3 + 0],
-		        file.v[vi * 3 + 1],
-		        file.v[vi * 3 + 2],
+			Vertex v =
+			{
+				obj->positions[gi.p * 3 + 0],
+				obj->positions[gi.p * 3 + 1],
+				obj->positions[gi.p * 3 + 2],
+				obj->normals[gi.n * 3 + 0],
+				obj->normals[gi.n * 3 + 1],
+				obj->normals[gi.n * 3 + 2],
+				obj->texcoords[gi.t * 2 + 0],
+				obj->texcoords[gi.t * 2 + 1],
+			};
 
-		        vni >= 0 ? file.vn[vni * 3 + 0] : 0,
-		        vni >= 0 ? file.vn[vni * 3 + 1] : 0,
-		        vni >= 0 ? file.vn[vni * 3 + 2] : 0,
+			// triangulate polygon on the fly; offset-3 is always the first polygon vertex
+			if (j >= 3)
+			{
+				vertices[vertex_offset + 0] = vertices[vertex_offset - 3];
+				vertices[vertex_offset + 1] = vertices[vertex_offset - 1];
+				vertex_offset += 2;
+			}
 
-		        vti >= 0 ? file.vt[vti * 3 + 0] : 0,
-		        vti >= 0 ? file.vt[vti * 3 + 1] : 0,
-		    };
+			vertices[vertex_offset] = v;
+			vertex_offset++;
+		}
 
-		vertices[i] = v;
+		index_offset += obj->face_vertices[i];
 	}
+
+	fast_obj_destroy(obj);
 
 	Mesh result;
 
@@ -97,6 +120,161 @@ Mesh parseObj(const char* path)
 	meshopt_remapVertexBuffer(&result.vertices[0], &vertices[0], total_indices, sizeof(Vertex), &remap[0]);
 
 	return result;
+}
+
+cgltf_accessor* getAccessor(const cgltf_attribute* attributes, size_t attribute_count, cgltf_attribute_type type, int index = 0)
+{
+	for (size_t i = 0; i < attribute_count; ++i)
+		if (attributes[i].type == type && attributes[i].index == index)
+			return attributes[i].data;
+
+	return 0;
+}
+
+Mesh parseGltf(const char* path)
+{
+	cgltf_options options = {};
+	cgltf_data* data = 0;
+	cgltf_result res = cgltf_parse_file(&options, path, &data);
+
+	if (res != cgltf_result_success)
+	{
+		return Mesh();
+	}
+
+	res = cgltf_load_buffers(&options, data, path);
+	if (res != cgltf_result_success)
+	{
+		cgltf_free(data);
+		return Mesh();
+	}
+
+	res = cgltf_validate(data);
+	if (res != cgltf_result_success)
+	{
+		cgltf_free(data);
+		return Mesh();
+	}
+
+	size_t total_vertices = 0;
+	size_t total_indices = 0;
+
+	for (size_t ni = 0; ni < data->nodes_count; ++ni)
+	{
+		if (!data->nodes[ni].mesh)
+			continue;
+
+		const cgltf_mesh& mesh = *data->nodes[ni].mesh;
+
+		for (size_t pi = 0; pi < mesh.primitives_count; ++pi)
+		{
+			const cgltf_primitive& primitive = mesh.primitives[pi];
+
+			cgltf_accessor* ai = primitive.indices;
+			cgltf_accessor* ap = getAccessor(primitive.attributes, primitive.attributes_count, cgltf_attribute_type_position);
+
+			if (!ai || !ap)
+				continue;
+
+			total_vertices += ap->count;
+			total_indices += ai->count;
+		}
+	}
+
+	Mesh result;
+	result.vertices.resize(total_vertices);
+	result.indices.resize(total_indices);
+
+	size_t vertex_offset = 0;
+	size_t index_offset = 0;
+
+	for (size_t ni = 0; ni < data->nodes_count; ++ni)
+	{
+		if (!data->nodes[ni].mesh)
+			continue;
+
+		const cgltf_mesh& mesh = *data->nodes[ni].mesh;
+
+		float transform[16];
+		cgltf_node_transform_world(&data->nodes[ni], transform);
+
+		for (size_t pi = 0; pi < mesh.primitives_count; ++pi)
+		{
+			const cgltf_primitive& primitive = mesh.primitives[pi];
+
+			cgltf_accessor* ai = primitive.indices;
+			cgltf_accessor* ap = getAccessor(primitive.attributes, primitive.attributes_count, cgltf_attribute_type_position);
+
+			if (!ai || !ap)
+				continue;
+
+			for (size_t i = 0; i < ai->count; ++i)
+				result.indices[index_offset + i] = unsigned(vertex_offset + cgltf_accessor_read_index(ai, i));
+
+			{
+				for (size_t i = 0; i < ap->count; ++i)
+				{
+					float ptr[3];
+					cgltf_accessor_read_float(ap, i, ptr, 3);
+
+					result.vertices[vertex_offset + i].px = ptr[0] * transform[0] + ptr[1] * transform[4] + ptr[2] * transform[8] + transform[12];
+					result.vertices[vertex_offset + i].py = ptr[0] * transform[1] + ptr[1] * transform[5] + ptr[2] * transform[9] + transform[13];
+					result.vertices[vertex_offset + i].pz = ptr[0] * transform[2] + ptr[1] * transform[6] + ptr[2] * transform[10] + transform[14];
+				}
+			}
+
+			if (cgltf_accessor* an = getAccessor(primitive.attributes, primitive.attributes_count, cgltf_attribute_type_normal))
+			{
+				for (size_t i = 0; i < ap->count; ++i)
+				{
+					float ptr[3];
+					cgltf_accessor_read_float(an, i, ptr, 3);
+
+					result.vertices[vertex_offset + i].nx = ptr[0] * transform[0] + ptr[1] * transform[4] + ptr[2] * transform[8];
+					result.vertices[vertex_offset + i].ny = ptr[0] * transform[1] + ptr[1] * transform[5] + ptr[2] * transform[9];
+					result.vertices[vertex_offset + i].nz = ptr[0] * transform[2] + ptr[1] * transform[6] + ptr[2] * transform[10];
+				}
+			}
+
+			if (cgltf_accessor* at = getAccessor(primitive.attributes, primitive.attributes_count, cgltf_attribute_type_texcoord))
+			{
+				for (size_t i = 0; i < ap->count; ++i)
+				{
+					float ptr[2];
+					cgltf_accessor_read_float(at, i, ptr, 2);
+
+					result.vertices[vertex_offset + i].tx = ptr[0];
+					result.vertices[vertex_offset + i].ty = ptr[1];
+				}
+			}
+
+			vertex_offset += ap->count;
+			index_offset += ai->count;
+		}
+	}
+
+	std::vector<unsigned int> remap(total_indices);
+	size_t unique_vertices = meshopt_generateVertexRemap(&remap[0], &result.indices[0], total_indices, &result.vertices[0], total_vertices, sizeof(Vertex));
+
+	meshopt_remapIndexBuffer(&result.indices[0], &result.indices[0], total_indices, &remap[0]);
+	meshopt_remapVertexBuffer(&result.vertices[0], &result.vertices[0], total_vertices, sizeof(Vertex), &remap[0]);
+
+	result.vertices.resize(unique_vertices);
+
+	cgltf_free(data);
+
+	return result;
+}
+
+Mesh loadMesh(const char* path)
+{
+	if (strstr(path, ".obj"))
+		return parseObj(path);
+
+	if (strstr(path, ".gltf") || strstr(path, ".glb"))
+		return parseGltf(path);
+
+	return Mesh();
 }
 
 bool saveObj(const Mesh& mesh, const char* path)
@@ -132,9 +310,9 @@ bool saveObj(const Mesh& mesh, const char* path)
 
 Mesh optimize(const Mesh& mesh, int lod)
 {
-	float threshold = powf(0.7f, float(lod));
+	float threshold = powf(0.5f, float(lod));
 	size_t target_index_count = size_t(mesh.indices.size() * threshold);
-	float target_error = 1e-3f;
+	float target_error = 1e-2f;
 
 	Mesh result = mesh;
 	result.kinds.resize(result.vertices.size());
@@ -255,7 +433,7 @@ void display(int x, int y, int width, int height, const Mesh& mesh, const Option
 
 				unsigned char kind = mesh.kinds[a];
 
-				glColor3f(kind == 0 || kind == 3, kind == 0 || kind == 2, kind == 0 || kind == 1);
+				glColor3f(kind == 0 || kind == 4, kind == 0 || kind == 2 || kind == 3, kind == 0 || kind == 1 || kind == 3);
 				glVertex3f((v0.px - centerx) / extent * scalex, (v0.py - centery) / extent * scaley, (v0.pz - centerz) / extent - zbias);
 				glVertex3f((v1.px - centerx) / extent * scalex, (v1.py - centery) / extent * scaley, (v1.pz - centerz) / extent - zbias);
 			}
@@ -274,7 +452,7 @@ void display(int x, int y, int width, int height, const Mesh& mesh, const Option
 
 			if (kind != 0)
 			{
-				glColor3f(kind == 0 || kind == 3, kind == 0 || kind == 2, kind == 0 || kind == 1);
+				glColor3f(kind == 0 || kind == 4, kind == 0 || kind == 2 || kind == 3, kind == 0 || kind == 1 || kind == 3);
 				glVertex3f((v.px - centerx) / extent * scalex, (v.py - centery) / extent * scaley, (v.pz - centerz) / extent - zbias * 2);
 			}
 		}
@@ -386,7 +564,7 @@ int main(int argc, char** argv)
 		File& f = files.back();
 
 		f.path = argv[i];
-		f.basemesh = parseObj(f.path);
+		f.basemesh = loadMesh(f.path);
 		f.lodmesh = optimize(f.basemesh, 0);
 
 		basetriangles += unsigned(f.basemesh.indices.size() / 3);

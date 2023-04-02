@@ -6,11 +6,14 @@
 #include <string.h>
 #include <time.h>
 
-#include <algorithm>
 #include <vector>
 
+#include "../tools/fast_obj.h"
 #include "miniz.h"
-#include "objparser.h"
+
+// This file uses assert() to verify algorithm correctness
+#undef NDEBUG
+#include <assert.h>
 
 #if defined(__linux__)
 double timestamp()
@@ -56,88 +59,64 @@ struct Mesh
 	std::vector<unsigned int> indices;
 };
 
-struct Triangle
-{
+union Triangle {
 	Vertex v[3];
-
-	bool operator<(const Triangle& other) const
-	{
-		return memcmp(v, other.v, sizeof(Triangle)) < 0;
-	}
+	char data[sizeof(Vertex) * 3];
 };
-
-Mesh generatePlane(unsigned int N)
-{
-	Mesh result;
-
-	result.vertices.reserve((N + 1) * (N + 1));
-	result.indices.reserve(N * N * 6);
-
-	for (unsigned int y = 0; y <= N; ++y)
-		for (unsigned int x = 0; x <= N; ++x)
-		{
-			Vertex v = {float(x), float(y), 0, 0, 0, 1, float(x) / float(N), float(y) / float(N)};
-
-			result.vertices.push_back(v);
-		}
-
-	for (unsigned int y = 0; y < N; ++y)
-		for (unsigned int x = 0; x < N; ++x)
-		{
-			result.indices.push_back((y + 0) * (N + 1) + (x + 0));
-			result.indices.push_back((y + 0) * (N + 1) + (x + 1));
-			result.indices.push_back((y + 1) * (N + 1) + (x + 0));
-
-			result.indices.push_back((y + 1) * (N + 1) + (x + 0));
-			result.indices.push_back((y + 0) * (N + 1) + (x + 1));
-			result.indices.push_back((y + 1) * (N + 1) + (x + 1));
-		}
-
-	return result;
-}
 
 Mesh parseObj(const char* path, double& reindex)
 {
-	ObjFile file;
-
-	if (!objParseFile(file, path))
+	fastObjMesh* obj = fast_obj_read(path);
+	if (!obj)
 	{
 		printf("Error loading %s: file not found\n", path);
 		return Mesh();
 	}
 
-	if (!objValidate(file))
-	{
-		printf("Error loading %s: invalid file data\n", path);
-		return Mesh();
-	}
+	size_t total_indices = 0;
 
-	size_t total_indices = file.f_size / 3;
+	for (unsigned int i = 0; i < obj->face_count; ++i)
+		total_indices += 3 * (obj->face_vertices[i] - 2);
 
 	std::vector<Vertex> vertices(total_indices);
 
-	for (size_t i = 0; i < total_indices; ++i)
+	size_t vertex_offset = 0;
+	size_t index_offset = 0;
+
+	for (unsigned int i = 0; i < obj->face_count; ++i)
 	{
-		int vi = file.f[i * 3 + 0];
-		int vti = file.f[i * 3 + 1];
-		int vni = file.f[i * 3 + 2];
+		for (unsigned int j = 0; j < obj->face_vertices[i]; ++j)
+		{
+			fastObjIndex gi = obj->indices[index_offset + j];
 
-		Vertex v =
-		    {
-		        file.v[vi * 3 + 0],
-		        file.v[vi * 3 + 1],
-		        file.v[vi * 3 + 2],
+			Vertex v =
+			    {
+			        obj->positions[gi.p * 3 + 0],
+			        obj->positions[gi.p * 3 + 1],
+			        obj->positions[gi.p * 3 + 2],
+			        obj->normals[gi.n * 3 + 0],
+			        obj->normals[gi.n * 3 + 1],
+			        obj->normals[gi.n * 3 + 2],
+			        obj->texcoords[gi.t * 2 + 0],
+			        obj->texcoords[gi.t * 2 + 1],
+			    };
 
-		        vni >= 0 ? file.vn[vni * 3 + 0] : 0,
-		        vni >= 0 ? file.vn[vni * 3 + 1] : 0,
-		        vni >= 0 ? file.vn[vni * 3 + 2] : 0,
+			// triangulate polygon on the fly; offset-3 is always the first polygon vertex
+			if (j >= 3)
+			{
+				vertices[vertex_offset + 0] = vertices[vertex_offset - 3];
+				vertices[vertex_offset + 1] = vertices[vertex_offset - 1];
+				vertex_offset += 2;
+			}
 
-		        vti >= 0 ? file.vt[vti * 3 + 0] : 0,
-		        vti >= 0 ? file.vt[vti * 3 + 1] : 0,
-		    };
+			vertices[vertex_offset] = v;
+			vertex_offset++;
+		}
 
-		vertices[i] = v;
+		index_offset += obj->face_vertices[i];
 	}
+
+	fast_obj_destroy(obj);
 
 	reindex = timestamp();
 
@@ -158,11 +137,16 @@ Mesh parseObj(const char* path, double& reindex)
 
 bool isMeshValid(const Mesh& mesh)
 {
-	if (mesh.indices.size() % 3 != 0)
+	size_t index_count = mesh.indices.size();
+	size_t vertex_count = mesh.vertices.size();
+
+	if (index_count % 3 != 0)
 		return false;
 
-	for (size_t i = 0; i < mesh.indices.size(); ++i)
-		if (mesh.indices[i] >= mesh.vertices.size())
+	const unsigned int* indices = &mesh.indices[0];
+
+	for (size_t i = 0; i < index_count; ++i)
+		if (indices[i] >= vertex_count)
 			return false;
 
 	return true;
@@ -190,35 +174,60 @@ bool rotateTriangle(Triangle& t)
 	return c01 != 0 && c02 != 0 && c12 != 0;
 }
 
-void deindexMesh(std::vector<Triangle>& dest, const Mesh& mesh)
+unsigned int hashRange(const char* key, size_t len)
 {
-	size_t triangles = mesh.indices.size() / 3;
+	// MurmurHash2
+	const unsigned int m = 0x5bd1e995;
+	const int r = 24;
 
-	dest.reserve(triangles);
+	unsigned int h = 0;
 
-	for (size_t i = 0; i < triangles; ++i)
+	while (len >= 4)
+	{
+		unsigned int k = *reinterpret_cast<const unsigned int*>(key);
+
+		k *= m;
+		k ^= k >> r;
+		k *= m;
+
+		h *= m;
+		h ^= k;
+
+		key += 4;
+		len -= 4;
+	}
+
+	return h;
+}
+
+unsigned int hashMesh(const Mesh& mesh)
+{
+	size_t triangle_count = mesh.indices.size() / 3;
+
+	const Vertex* vertices = &mesh.vertices[0];
+	const unsigned int* indices = &mesh.indices[0];
+
+	unsigned int h1 = 0;
+	unsigned int h2 = 0;
+
+	for (size_t i = 0; i < triangle_count; ++i)
 	{
 		Triangle t;
-
-		for (int k = 0; k < 3; ++k)
-			t.v[k] = mesh.vertices[mesh.indices[i * 3 + k]];
+		t.v[0] = vertices[indices[i * 3 + 0]];
+		t.v[1] = vertices[indices[i * 3 + 1]];
+		t.v[2] = vertices[indices[i * 3 + 2]];
 
 		// skip degenerate triangles since some algorithms don't preserve them
 		if (rotateTriangle(t))
-			dest.push_back(t);
+		{
+			unsigned int hash = hashRange(t.data, sizeof(t.data));
+
+			h1 ^= hash;
+			h2 += hash;
+		}
 	}
-}
 
-bool areMeshesEqual(const Mesh& lhs, const Mesh& rhs)
-{
-	std::vector<Triangle> lt, rt;
-	deindexMesh(lt, lhs);
-	deindexMesh(rt, rhs);
-
-	std::sort(lt.begin(), lt.end());
-	std::sort(rt.begin(), rt.end());
-
-	return lt.size() == rt.size() && memcmp(&lt[0], &rt[0], lt.size() * sizeof(Triangle)) == 0;
+	return h1 * 0x5bd1e995 + h2;
 }
 
 void optNone(Mesh& mesh)
@@ -228,23 +237,25 @@ void optNone(Mesh& mesh)
 
 void optRandomShuffle(Mesh& mesh)
 {
-	std::vector<unsigned int> faces(mesh.indices.size() / 3);
+	size_t triangle_count = mesh.indices.size() / 3;
 
-	for (size_t i = 0; i < faces.size(); ++i)
-		faces[i] = static_cast<unsigned int>(i);
+	unsigned int* indices = &mesh.indices[0];
 
-	std::random_shuffle(faces.begin(), faces.end());
+	unsigned int rng = 0;
 
-	std::vector<unsigned int> result(mesh.indices.size());
-
-	for (size_t i = 0; i < faces.size(); ++i)
+	for (size_t i = triangle_count - 1; i > 0; --i)
 	{
-		result[i * 3 + 0] = mesh.indices[faces[i] * 3 + 0];
-		result[i * 3 + 1] = mesh.indices[faces[i] * 3 + 1];
-		result[i * 3 + 2] = mesh.indices[faces[i] * 3 + 2];
-	}
+		// Fisher-Yates shuffle
+		size_t j = rng % (i + 1);
 
-	mesh.indices.swap(result);
+		unsigned int t;
+		t = indices[3 * j + 0], indices[3 * j + 0] = indices[3 * i + 0], indices[3 * i + 0] = t;
+		t = indices[3 * j + 1], indices[3 * j + 1] = indices[3 * i + 1], indices[3 * i + 1] = t;
+		t = indices[3 * j + 2], indices[3 * j + 2] = indices[3 * i + 2], indices[3 * i + 2] = t;
+
+		// LCG RNG, constants from Numerical Recipes
+		rng = rng * 1664525 + 1013904223;
+	}
 }
 
 void optCache(Mesh& mesh)
@@ -297,7 +308,7 @@ struct PackedVertex
 {
 	unsigned short px, py, pz;
 	unsigned short pw; // padding to 4b boundary
-	unsigned char nx, ny, nz, nw;
+	signed char nx, ny, nz, nw;
 	unsigned short tx, ty;
 };
 
@@ -305,25 +316,28 @@ void packMesh(std::vector<PackedVertex>& pv, const std::vector<Vertex>& vertices
 {
 	for (size_t i = 0; i < vertices.size(); ++i)
 	{
-		pv[i].px = meshopt_quantizeHalf(vertices[i].px);
-		pv[i].py = meshopt_quantizeHalf(vertices[i].py);
-		pv[i].pz = meshopt_quantizeHalf(vertices[i].pz);
-		pv[i].pw = 0;
+		const Vertex& vi = vertices[i];
+		PackedVertex& pvi = pv[i];
 
-		pv[i].nx = char(meshopt_quantizeSnorm(vertices[i].nx, 8));
-		pv[i].ny = char(meshopt_quantizeSnorm(vertices[i].ny, 8));
-		pv[i].nz = char(meshopt_quantizeSnorm(vertices[i].nz, 8));
-		pv[i].nw = 0;
+		pvi.px = meshopt_quantizeHalf(vi.px);
+		pvi.py = meshopt_quantizeHalf(vi.py);
+		pvi.pz = meshopt_quantizeHalf(vi.pz);
+		pvi.pw = 0;
 
-		pv[i].tx = meshopt_quantizeHalf(vertices[i].tx);
-		pv[i].ty = meshopt_quantizeHalf(vertices[i].ty);
+		pvi.nx = char(meshopt_quantizeSnorm(vi.nx, 8));
+		pvi.ny = char(meshopt_quantizeSnorm(vi.ny, 8));
+		pvi.nz = char(meshopt_quantizeSnorm(vi.nz, 8));
+		pvi.nw = 0;
+
+		pvi.tx = meshopt_quantizeHalf(vi.tx);
+		pvi.ty = meshopt_quantizeHalf(vi.ty);
 	}
 }
 
 struct PackedVertexOct
 {
 	unsigned short px, py, pz;
-	unsigned char nu, nv; // octahedron encoded normal, aliases .pw
+	signed char nu, nv; // octahedron encoded normal, aliases .pw
 	unsigned short tx, ty;
 };
 
@@ -331,27 +345,89 @@ void packMesh(std::vector<PackedVertexOct>& pv, const std::vector<Vertex>& verti
 {
 	for (size_t i = 0; i < vertices.size(); ++i)
 	{
-		pv[i].px = meshopt_quantizeHalf(vertices[i].px);
-		pv[i].py = meshopt_quantizeHalf(vertices[i].py);
-		pv[i].pz = meshopt_quantizeHalf(vertices[i].pz);
+		const Vertex& vi = vertices[i];
+		PackedVertexOct& pvi = pv[i];
 
-		float nsum = fabsf(vertices[i].nx) + fabsf(vertices[i].ny) + fabsf(vertices[i].nz);
-		float nx = vertices[i].nx / nsum;
-		float ny = vertices[i].ny / nsum;
-		float nz = vertices[i].nz;
+		pvi.px = meshopt_quantizeHalf(vi.px);
+		pvi.py = meshopt_quantizeHalf(vi.py);
+		pvi.pz = meshopt_quantizeHalf(vi.pz);
+
+		float nsum = fabsf(vi.nx) + fabsf(vi.ny) + fabsf(vi.nz);
+		float nx = vi.nx / nsum;
+		float ny = vi.ny / nsum;
+		float nz = vi.nz;
 
 		float nu = nz >= 0 ? nx : (1 - fabsf(ny)) * (nx >= 0 ? 1 : -1);
 		float nv = nz >= 0 ? ny : (1 - fabsf(nx)) * (ny >= 0 ? 1 : -1);
 
-		pv[i].nu = char(meshopt_quantizeSnorm(nu, 8));
-		pv[i].nv = char(meshopt_quantizeSnorm(nv, 8));
+		pvi.nu = char(meshopt_quantizeSnorm(nu, 8));
+		pvi.nv = char(meshopt_quantizeSnorm(nv, 8));
 
-		pv[i].tx = meshopt_quantizeHalf(vertices[i].tx);
-		pv[i].ty = meshopt_quantizeHalf(vertices[i].ty);
+		pvi.tx = meshopt_quantizeHalf(vi.tx);
+		pvi.ty = meshopt_quantizeHalf(vi.ty);
 	}
 }
 
-void simplify(const Mesh& mesh)
+void simplify(const Mesh& mesh, float threshold = 0.2f)
+{
+	Mesh lod;
+
+	double start = timestamp();
+
+	size_t target_index_count = size_t(mesh.indices.size() * threshold);
+	float target_error = 1e-2f;
+
+	lod.indices.resize(mesh.indices.size()); // note: simplify needs space for index_count elements in the destination array, not target_index_count
+	lod.indices.resize(meshopt_simplify(&lod.indices[0], &mesh.indices[0], mesh.indices.size(), &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex), target_index_count, target_error));
+
+	lod.vertices.resize(lod.indices.size() < mesh.vertices.size() ? lod.indices.size() : mesh.vertices.size()); // note: this is just to reduce the cost of resize()
+	lod.vertices.resize(meshopt_optimizeVertexFetch(&lod.vertices[0], &lod.indices[0], lod.indices.size(), &mesh.vertices[0], mesh.vertices.size(), sizeof(Vertex)));
+
+	double end = timestamp();
+
+	printf("%-9s: %d triangles => %d triangles in %.2f msec\n",
+	       "Simplify",
+	       int(mesh.indices.size() / 3), int(lod.indices.size() / 3), (end - start) * 1000);
+}
+
+void simplifySloppy(const Mesh& mesh, float threshold = 0.2f)
+{
+	Mesh lod;
+
+	double start = timestamp();
+
+	size_t target_index_count = size_t(mesh.indices.size() * threshold);
+
+	lod.indices.resize(target_index_count); // note: simplifySloppy, unlike simplify, is guaranteed to output results that don't exceed the requested target_index_count
+	lod.indices.resize(meshopt_simplifySloppy(&lod.indices[0], &mesh.indices[0], mesh.indices.size(), &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex), target_index_count));
+
+	lod.vertices.resize(lod.indices.size() < mesh.vertices.size() ? lod.indices.size() : mesh.vertices.size()); // note: this is just to reduce the cost of resize()
+	lod.vertices.resize(meshopt_optimizeVertexFetch(&lod.vertices[0], &lod.indices[0], lod.indices.size(), &mesh.vertices[0], mesh.vertices.size(), sizeof(Vertex)));
+
+	double end = timestamp();
+
+	printf("%-9s: %d triangles => %d triangles in %.2f msec\n",
+	       "SimplifyS",
+	       int(mesh.indices.size() / 3), int(lod.indices.size() / 3), (end - start) * 1000);
+}
+
+void simplifyPoints(const Mesh& mesh, float threshold = 0.2f)
+{
+	double start = timestamp();
+
+	size_t target_vertex_count = size_t(mesh.vertices.size() * threshold);
+
+	std::vector<unsigned int> indices(target_vertex_count);
+	indices.resize(meshopt_simplifyPoints(&indices[0], &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex), target_vertex_count));
+
+	double end = timestamp();
+
+	printf("%-9s: %d points => %d points in %.2f msec\n",
+	       "SimplifyP",
+	       int(mesh.vertices.size()), int(indices.size()), (end - start) * 1000);
+}
+
+void simplifyComplete(const Mesh& mesh)
 {
 	static const size_t lod_count = 5;
 
@@ -369,14 +445,17 @@ void simplify(const Mesh& mesh)
 
 		float threshold = powf(0.7f, float(i));
 		size_t target_index_count = size_t(mesh.indices.size() * threshold) / 3 * 3;
-		float target_error = 1e-3f;
+		float target_error = 1e-2f;
 
 		// we can simplify all the way from base level or from the last result
 		// simplifying from the base level sometimes produces better results, but simplifying from last level is faster
 		const std::vector<unsigned int>& source = lods[i - 1];
 
+		if (source.size() < target_index_count)
+			target_index_count = source.size();
+
 		lod.resize(source.size());
-		lod.resize(meshopt_simplify(&lod[0], &source[0], source.size(), &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex), std::min(source.size(), target_index_count), target_error));
+		lod.resize(meshopt_simplify(&lod[0], &source[0], source.size(), &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex), target_index_count, target_error));
 	}
 
 	double middle = timestamp();
@@ -425,7 +504,7 @@ void simplify(const Mesh& mesh)
 	double end = timestamp();
 
 	printf("%-9s: %d triangles => %d LOD levels down to %d triangles in %.2f msec, optimized in %.2f msec\n",
-	       "Simplify",
+	       "SimplifyC",
 	       int(lod_index_counts[0]) / 3, int(lod_count), int(lod_index_counts[lod_count - 1]) / 3,
 	       (middle - start) * 1000, (end - middle) * 1000);
 
@@ -465,7 +544,7 @@ void optimize(const Mesh& mesh, const char* name, void (*optf)(Mesh& mesh))
 	double end = timestamp();
 
 	assert(isMeshValid(copy));
-	assert(areMeshesEqual(mesh, copy));
+	assert(hashMesh(mesh) == hashMesh(copy));
 
 	meshopt_VertexCacheStatistics vcs = meshopt_analyzeVertexCache(&copy.indices[0], copy.indices.size(), copy.vertices.size(), kCacheSize, 0, 0);
 	meshopt_VertexFetchStatistics vfs = meshopt_analyzeVertexFetch(&copy.indices[0], copy.indices.size(), copy.vertices.size(), sizeof(Vertex));
@@ -488,6 +567,9 @@ size_t compress(const std::vector<T>& data)
 
 void encodeIndex(const Mesh& mesh)
 {
+	// allocate result outside of the timing loop to exclude memset() from decode timing
+	std::vector<unsigned int> result(mesh.indices.size());
+
 	double start = timestamp();
 
 	std::vector<unsigned char> buffer(meshopt_encodeIndexBufferBound(mesh.indices.size(), mesh.vertices.size()));
@@ -495,8 +577,6 @@ void encodeIndex(const Mesh& mesh)
 
 	double middle = timestamp();
 
-	// using meshopt_Buffer instead of std::vector to avoid memset overhead
-	meshopt_Buffer<unsigned int> result(mesh.indices.size());
 	int res = meshopt_decodeIndexBuffer(&result[0], mesh.indices.size(), &buffer[0], buffer.size());
 	assert(res == 0);
 	(void)res;
@@ -513,88 +593,12 @@ void encodeIndex(const Mesh& mesh)
 		    (result[i + 2] == mesh.indices[i + 0] && result[i + 0] == mesh.indices[i + 1] && result[i + 1] == mesh.indices[i + 2]));
 	}
 
-	if (mesh.vertices.size() <= 65536)
-	{
-		meshopt_Buffer<unsigned short> result2(mesh.indices.size());
-		int res2 = meshopt_decodeIndexBuffer(&result2[0], mesh.indices.size(), &buffer[0], buffer.size());
-		assert(res2 == 0);
-		(void)res2;
-
-		for (size_t i = 0; i < mesh.indices.size(); i += 3)
-		{
-			assert(result[i + 0] == result2[i + 0] && result[i + 1] == result2[i + 1] && result[i + 2] == result2[i + 2]);
-		}
-	}
-
 	printf("IdxCodec : %.1f bits/triangle (post-deflate %.1f bits/triangle); encode %.2f msec, decode %.2f msec (%.2f GB/s)\n",
 	       double(buffer.size() * 8) / double(mesh.indices.size() / 3),
 	       double(csize * 8) / double(mesh.indices.size() / 3),
 	       (middle - start) * 1000,
 	       (end - middle) * 1000,
-	       (double(result.size * 4) / (1 << 30)) / (end - middle));
-}
-
-void encodeIndexCoverage()
-{
-	// note: 4 6 5 triangle here is a combo-breaker:
-	// we encode it without rotating, a=next, c=next - this means we do *not* bump next to 6
-	// which means that the next triangle can't be encoded via next sequencing!
-	const unsigned int indices[] = {0, 1, 2, 2, 1, 3, 4, 6, 5, 7, 8, 9};
-	const size_t index_count = sizeof(indices) / sizeof(indices[0]);
-	const size_t vertex_count = 10;
-
-	std::vector<unsigned char> buffer(meshopt_encodeIndexBufferBound(index_count, vertex_count));
-	buffer.resize(meshopt_encodeIndexBuffer(&buffer[0], buffer.size(), indices, index_count));
-
-	// check that encode is memory-safe; note that we reallocate the buffer for each try to make sure ASAN can verify buffer access
-	for (size_t i = 0; i <= buffer.size(); ++i)
-	{
-		std::vector<unsigned char> shortbuffer(i);
-		size_t result = meshopt_encodeIndexBuffer(i == 0 ? 0 : &shortbuffer[0], i, indices, index_count);
-		(void)result;
-
-		if (i == buffer.size())
-			assert(result == buffer.size());
-		else
-			assert(result == 0);
-	}
-
-	// check that decode is memory-safe; note that we reallocate the buffer for each try to make sure ASAN can verify buffer access
-	unsigned int destination[index_count];
-
-	for (size_t i = 0; i <= buffer.size(); ++i)
-	{
-		std::vector<unsigned char> shortbuffer(buffer.begin(), buffer.begin() + i);
-		int result = meshopt_decodeIndexBuffer(destination, index_count, i == 0 ? 0 : &shortbuffer[0], i);
-		(void)result;
-
-		if (i == buffer.size())
-			assert(result == 0);
-		else
-			assert(result < 0);
-	}
-
-	// check that decoder doesn't accept extra bytes after a valid stream
-	{
-		std::vector<unsigned char> largebuffer(buffer);
-		largebuffer.push_back(0);
-
-		int result = meshopt_decodeIndexBuffer(destination, index_count, &largebuffer[0], largebuffer.size());
-		(void)result;
-
-		assert(result < 0);
-	}
-
-	// check that decoder doesn't accept malformed headers
-	{
-		std::vector<unsigned char> brokenbuffer(buffer);
-		brokenbuffer[0] = 0;
-
-		int result = meshopt_decodeIndexBuffer(destination, index_count, &brokenbuffer[0], brokenbuffer.size());
-		(void)result;
-
-		assert(result < 0);
-	}
+	       (double(result.size() * 4) / (1 << 30)) / (end - middle));
 }
 
 template <typename PV>
@@ -616,6 +620,9 @@ void encodeVertex(const Mesh& mesh, const char* pvn)
 	std::vector<PV> pv(mesh.vertices.size());
 	packMesh(pv, mesh.vertices);
 
+	// allocate result outside of the timing loop to exclude memset() from decode timing
+	std::vector<PV> result(mesh.vertices.size());
+
 	double start = timestamp();
 
 	std::vector<unsigned char> vbuf(meshopt_encodeVertexBufferBound(mesh.vertices.size(), sizeof(PV)));
@@ -623,8 +630,6 @@ void encodeVertex(const Mesh& mesh, const char* pvn)
 
 	double middle = timestamp();
 
-	// using meshopt_Buffer instead of std::vector to avoid memset overhead
-	meshopt_Buffer<PV> result(mesh.vertices.size());
 	int res = meshopt_decodeVertexBuffer(&result[0], mesh.vertices.size(), sizeof(PV), &vbuf[0], vbuf.size());
 	assert(res == 0);
 	(void)res;
@@ -640,100 +645,68 @@ void encodeVertex(const Mesh& mesh, const char* pvn)
 	       double(csize * 8) / double(mesh.vertices.size()),
 	       (middle - start) * 1000,
 	       (end - middle) * 1000,
-	       (double(result.size * sizeof(PV)) / (1 << 30)) / (end - middle));
+	       (double(result.size() * sizeof(PV)) / (1 << 30)) / (end - middle));
 }
 
-void encodeVertexCoverage()
+void stripify(const Mesh& mesh, bool use_restart)
 {
-	typedef PackedVertexOct PV;
+	unsigned int restart_index = use_restart ? ~0u : 0;
 
-	const PV vertices[] =
-	    {
-	        {0, 0, 0, 0, 0, 0, 0},
-	        {300, 0, 0, 0, 0, 500, 0},
-	        {0, 300, 0, 0, 0, 0, 500},
-	        {300, 300, 0, 0, 0, 500, 500},
-	    };
-
-	const size_t vertex_count = 4;
-
-	std::vector<unsigned char> buffer(meshopt_encodeVertexBufferBound(vertex_count, sizeof(PV)));
-	buffer.resize(meshopt_encodeVertexBuffer(&buffer[0], buffer.size(), vertices, vertex_count, sizeof(PV)));
-
-	// check that encode is memory-safe; note that we reallocate the buffer for each try to make sure ASAN can verify buffer access
-	for (size_t i = 0; i <= buffer.size(); ++i)
-	{
-		std::vector<unsigned char> shortbuffer(i);
-		size_t result = meshopt_encodeVertexBuffer(i == 0 ? 0 : &shortbuffer[0], i, vertices, vertex_count, sizeof(PV));
-		(void)result;
-
-		if (i == buffer.size())
-			assert(result == buffer.size());
-		else
-			assert(result == 0);
-	}
-
-	// check that decode is memory-safe; note that we reallocate the buffer for each try to make sure ASAN can verify buffer access
-	PV destination[vertex_count];
-
-	for (size_t i = 0; i <= buffer.size(); ++i)
-	{
-		std::vector<unsigned char> shortbuffer(buffer.begin(), buffer.begin() + i);
-		int result = meshopt_decodeVertexBuffer(destination, vertex_count, sizeof(PV), i == 0 ? 0 : &shortbuffer[0], i);
-		(void)result;
-
-		if (i == buffer.size())
-			assert(result == 0);
-		else
-			assert(result < 0);
-	}
-
-	// check that decoder doesn't accept extra bytes after a valid stream
-	{
-		std::vector<unsigned char> largebuffer(buffer);
-		largebuffer.push_back(0);
-
-		int result = meshopt_decodeVertexBuffer(destination, vertex_count, sizeof(PV), &largebuffer[0], largebuffer.size());
-		(void)result;
-
-		assert(result < 0);
-	}
-
-	// check that decoder doesn't accept malformed headers
-	{
-		std::vector<unsigned char> brokenbuffer(buffer);
-		brokenbuffer[0] = 0;
-
-		int result = meshopt_decodeVertexBuffer(destination, vertex_count, sizeof(PV), &brokenbuffer[0], brokenbuffer.size());
-		(void)result;
-
-		assert(result < 0);
-	}
-}
-
-void stripify(const Mesh& mesh)
-{
 	// note: input mesh is assumed to be optimized for vertex cache and vertex fetch
 	double start = timestamp();
 	std::vector<unsigned int> strip(meshopt_stripifyBound(mesh.indices.size()));
-	strip.resize(meshopt_stripify(&strip[0], &mesh.indices[0], mesh.indices.size(), mesh.vertices.size()));
+	strip.resize(meshopt_stripify(&strip[0], &mesh.indices[0], mesh.indices.size(), mesh.vertices.size(), restart_index));
 	double end = timestamp();
 
 	Mesh copy = mesh;
-	copy.indices.resize(meshopt_unstripify(&copy.indices[0], &strip[0], strip.size()));
+	copy.indices.resize(meshopt_unstripify(&copy.indices[0], &strip[0], strip.size(), restart_index));
 	assert(copy.indices.size() <= meshopt_unstripifyBound(strip.size()));
 
 	assert(isMeshValid(copy));
-	assert(areMeshesEqual(mesh, copy));
+	assert(hashMesh(mesh) == hashMesh(copy));
 
 	meshopt_VertexCacheStatistics vcs = meshopt_analyzeVertexCache(&copy.indices[0], mesh.indices.size(), mesh.vertices.size(), kCacheSize, 0, 0);
 	meshopt_VertexCacheStatistics vcs_nv = meshopt_analyzeVertexCache(&copy.indices[0], mesh.indices.size(), mesh.vertices.size(), 32, 32, 32);
 	meshopt_VertexCacheStatistics vcs_amd = meshopt_analyzeVertexCache(&copy.indices[0], mesh.indices.size(), mesh.vertices.size(), 14, 64, 128);
 	meshopt_VertexCacheStatistics vcs_intel = meshopt_analyzeVertexCache(&copy.indices[0], mesh.indices.size(), mesh.vertices.size(), 128, 0, 0);
 
-	printf("Stripify : ACMR %f ATVR %f (NV %f AMD %f Intel %f); %d strip indices (%.1f%%) in %.2f msec\n",
+	printf("Stripify%c: ACMR %f ATVR %f (NV %f AMD %f Intel %f); %d strip indices (%.1f%%) in %.2f msec\n",
+	       use_restart ? 'R' : ' ',
 	       vcs.acmr, vcs.atvr, vcs_nv.atvr, vcs_amd.atvr, vcs_intel.atvr,
 	       int(strip.size()), double(strip.size()) / double(mesh.indices.size()) * 100,
+	       (end - start) * 1000);
+}
+
+void shadow(const Mesh& mesh)
+{
+	// note: input mesh is assumed to be optimized for vertex cache and vertex fetch
+
+	double start = timestamp();
+	// this index buffer can be used for position-only rendering using the same vertex data that the original index buffer uses
+	std::vector<unsigned int> shadow_indices(mesh.indices.size());
+	meshopt_generateShadowIndexBuffer(&shadow_indices[0], &mesh.indices[0], mesh.indices.size(), &mesh.vertices[0], mesh.vertices.size(), sizeof(float) * 3, sizeof(Vertex));
+	double end = timestamp();
+
+	// while you can't optimize the vertex data after shadow IB was constructed, you can and should optimize the shadow IB for vertex cache
+	// this is valuable even if the original indices array was optimized for vertex cache!
+	meshopt_optimizeVertexCache(&shadow_indices[0], &shadow_indices[0], shadow_indices.size(), mesh.vertices.size());
+
+	meshopt_VertexCacheStatistics vcs = meshopt_analyzeVertexCache(&mesh.indices[0], mesh.indices.size(), mesh.vertices.size(), kCacheSize, 0, 0);
+	meshopt_VertexCacheStatistics vcss = meshopt_analyzeVertexCache(&shadow_indices[0], shadow_indices.size(), mesh.vertices.size(), kCacheSize, 0, 0);
+
+	std::vector<char> shadow_flags(mesh.vertices.size());
+	size_t shadow_vertices = 0;
+
+	for (size_t i = 0; i < shadow_indices.size(); ++i)
+	{
+		unsigned int index = shadow_indices[i];
+		shadow_vertices += 1 - shadow_flags[index];
+		shadow_flags[index] = 1;
+	}
+
+	printf("ShadowIB : ACMR %f (%.2fx improvement); %d shadow vertices (%.2fx improvement) in %.2f msec\n",
+	       vcss.acmr, double(vcs.vertices_transformed) / double(vcss.vertices_transformed),
+	       int(shadow_vertices), double(mesh.vertices.size()) / double(shadow_vertices),
 	       (end - start) * 1000);
 }
 
@@ -774,6 +747,7 @@ void meshlets(const Mesh& mesh)
 	size_t rejected_alt = 0;
 	size_t rejected_alt_s8 = 0;
 	size_t accepted = 0;
+	size_t accepted_s8 = 0;
 
 	double startc = timestamp();
 	for (size_t i = 0; i < meshlets.size(); ++i)
@@ -781,64 +755,217 @@ void meshlets(const Mesh& mesh)
 		meshopt_Bounds bounds = meshopt_computeMeshletBounds(&meshlets[i], &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex));
 
 		// trivial accept: we can't ever backface cull this meshlet
-		if (bounds.cone_cutoff >= 1)
-		{
-			accepted++;
-		}
-		else
-		{
-			// perspective projection: dot(normalize(cone_apex - camera_position), cone_axis) > cone_cutoff
-			float mview[3] = {bounds.cone_apex[0] - camera[0], bounds.cone_apex[1] - camera[1], bounds.cone_apex[2] - camera[2]};
-			float mviewlength = sqrtf(mview[0] * mview[0] + mview[1] * mview[1] + mview[2] * mview[2]);
+		accepted += (bounds.cone_cutoff >= 1);
+		accepted_s8 += (bounds.cone_cutoff_s8 >= 127);
 
-			rejected += mview[0] * bounds.cone_axis[0] + mview[1] * bounds.cone_axis[1] + mview[2] * bounds.cone_axis[2] > bounds.cone_cutoff * mviewlength;
-			rejected_s8 += mview[0] * (bounds.cone_axis_s8[0] / 127.f) + mview[1] * (bounds.cone_axis_s8[1] / 127.f) + mview[2] * (bounds.cone_axis_s8[2] / 127.f) > (bounds.cone_cutoff_s8 / 127.f) * mviewlength;
+		// perspective projection: dot(normalize(cone_apex - camera_position), cone_axis) > cone_cutoff
+		float mview[3] = {bounds.cone_apex[0] - camera[0], bounds.cone_apex[1] - camera[1], bounds.cone_apex[2] - camera[2]};
+		float mviewlength = sqrtf(mview[0] * mview[0] + mview[1] * mview[1] + mview[2] * mview[2]);
 
-			// alternative formulation for perspective projection that doesn't use apex (and uses cluster bounding sphere instead):
-			// dot(normalize(center - camera_position), cone_axis) > cone_cutoff + radius / length(center - camera_position)
-			float cview[3] = {bounds.center[0] - camera[0], bounds.center[1] - camera[1], bounds.center[2] - camera[2]};
-			float cviewlength = sqrtf(cview[0] * cview[0] + cview[1] * cview[1] + cview[2] * cview[2]);
+		rejected += mview[0] * bounds.cone_axis[0] + mview[1] * bounds.cone_axis[1] + mview[2] * bounds.cone_axis[2] >= bounds.cone_cutoff * mviewlength;
+		rejected_s8 += mview[0] * (bounds.cone_axis_s8[0] / 127.f) + mview[1] * (bounds.cone_axis_s8[1] / 127.f) + mview[2] * (bounds.cone_axis_s8[2] / 127.f) >= (bounds.cone_cutoff_s8 / 127.f) * mviewlength;
 
-			rejected_alt += cview[0] * bounds.cone_axis[0] + cview[1] * bounds.cone_axis[1] + cview[2] * bounds.cone_axis[2] > bounds.cone_cutoff * cviewlength + bounds.radius;
-			rejected_alt_s8 += cview[0] * (bounds.cone_axis_s8[0] / 127.f) + cview[1] * (bounds.cone_axis_s8[1] / 127.f) + cview[2] * (bounds.cone_axis_s8[2] / 127.f) > (bounds.cone_cutoff_s8 / 127.f) * cviewlength + bounds.radius;
-		}
+		// alternative formulation for perspective projection that doesn't use apex (and uses cluster bounding sphere instead):
+		// dot(normalize(center - camera_position), cone_axis) > cone_cutoff + radius / length(center - camera_position)
+		float cview[3] = {bounds.center[0] - camera[0], bounds.center[1] - camera[1], bounds.center[2] - camera[2]};
+		float cviewlength = sqrtf(cview[0] * cview[0] + cview[1] * cview[1] + cview[2] * cview[2]);
+
+		rejected_alt += cview[0] * bounds.cone_axis[0] + cview[1] * bounds.cone_axis[1] + cview[2] * bounds.cone_axis[2] >= bounds.cone_cutoff * cviewlength + bounds.radius;
+		rejected_alt_s8 += cview[0] * (bounds.cone_axis_s8[0] / 127.f) + cview[1] * (bounds.cone_axis_s8[1] / 127.f) + cview[2] * (bounds.cone_axis_s8[2] / 127.f) >= (bounds.cone_cutoff_s8 / 127.f) * cviewlength + bounds.radius;
 	}
 	double endc = timestamp();
 
-	printf("ConeCull : rejected apex %d (%.1f%%) / alt %d (%.1f%%) / apex snorm %d (%.1f%%) / alt snorm %d (%.1f%%), triv. accepted %d (%.1f%%) in %.2f msec\n",
+	printf("ConeCull : rejected apex %d (%.1f%%) / center %d (%.1f%%), trivially accepted %d (%.1f%%) in %.2f msec\n",
 	       int(rejected), double(rejected) / double(meshlets.size()) * 100,
 	       int(rejected_alt), double(rejected_alt) / double(meshlets.size()) * 100,
-	       int(rejected_s8), double(rejected_s8) / double(meshlets.size()) * 100,
-	       int(rejected_alt_s8), double(rejected_alt_s8) / double(meshlets.size()) * 100,
 	       int(accepted), double(accepted) / double(meshlets.size()) * 100,
 	       (endc - startc) * 1000);
+	printf("ConeCull8: rejected apex %d (%.1f%%) / center %d (%.1f%%), trivially accepted %d (%.1f%%) in %.2f msec\n",
+	       int(rejected_s8), double(rejected_s8) / double(meshlets.size()) * 100,
+	       int(rejected_alt_s8), double(rejected_alt_s8) / double(meshlets.size()) * 100,
+	       int(accepted_s8), double(accepted_s8) / double(meshlets.size()) * 100,
+	       (endc - startc) * 1000);
+}
+
+void spatialSort(const Mesh& mesh)
+{
+	typedef PackedVertexOct PV;
+
+	std::vector<PV> pv(mesh.vertices.size());
+	packMesh(pv, mesh.vertices);
+
+	double start = timestamp();
+
+	std::vector<unsigned int> remap(mesh.vertices.size());
+	meshopt_spatialSortRemap(&remap[0], &mesh.vertices[0].px, mesh.vertices.size(), sizeof(Vertex));
+
+	double end = timestamp();
+
+	meshopt_remapVertexBuffer(&pv[0], &pv[0], mesh.vertices.size(), sizeof(PV), &remap[0]);
+
+	std::vector<unsigned char> vbuf(meshopt_encodeVertexBufferBound(mesh.vertices.size(), sizeof(PV)));
+	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size(), &pv[0], mesh.vertices.size(), sizeof(PV)));
+
+	size_t csize = compress(vbuf);
+
+	printf("Spatial  : %.1f bits/vertex (post-deflate %.1f bits/vertex); sort %.2f msec\n",
+	       double(vbuf.size() * 8) / double(mesh.vertices.size()),
+	       double(csize * 8) / double(mesh.vertices.size()),
+	       (end - start) * 1000);
+}
+
+void spatialSortTriangles(const Mesh& mesh)
+{
+	typedef PackedVertexOct PV;
+
+	Mesh copy = mesh;
+
+	double start = timestamp();
+
+	meshopt_spatialSortTriangles(&copy.indices[0], &copy.indices[0], mesh.indices.size(), &copy.vertices[0].px, copy.vertices.size(), sizeof(Vertex));
+
+	double end = timestamp();
+
+	meshopt_optimizeVertexCache(&copy.indices[0], &copy.indices[0], copy.indices.size(), copy.vertices.size());
+	meshopt_optimizeVertexFetch(&copy.vertices[0], &copy.indices[0], copy.indices.size(), &copy.vertices[0], copy.vertices.size(), sizeof(Vertex));
+
+	std::vector<PV> pv(mesh.vertices.size());
+	packMesh(pv, copy.vertices);
+
+	std::vector<unsigned char> vbuf(meshopt_encodeVertexBufferBound(mesh.vertices.size(), sizeof(PV)));
+	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size(), &pv[0], mesh.vertices.size(), sizeof(PV)));
+
+	std::vector<unsigned char> ibuf(meshopt_encodeIndexBufferBound(mesh.indices.size(), mesh.vertices.size()));
+	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size(), &copy.indices[0], mesh.indices.size()));
+
+	size_t csizev = compress(vbuf);
+	size_t csizei = compress(ibuf);
+
+	printf("SpatialT : %.1f bits/vertex (post-deflate %.1f bits/vertex); %.1f bits/triangle (post-deflate %.1f bits/triangle); sort %.2f msec\n",
+	       double(vbuf.size() * 8) / double(mesh.vertices.size()),
+	       double(csizev * 8) / double(mesh.vertices.size()),
+	       double(ibuf.size() * 8) / double(mesh.indices.size() / 3),
+	       double(csizei * 8) / double(mesh.indices.size() / 3),
+	       (end - start) * 1000);
 }
 
 bool loadMesh(Mesh& mesh, const char* path)
 {
-	if (path)
-	{
-		double start = timestamp();
-		double middle;
-		mesh = parseObj(path, middle);
-		double end = timestamp();
+	double start = timestamp();
+	double middle;
+	mesh = parseObj(path, middle);
+	double end = timestamp();
 
-		if (mesh.vertices.empty())
+	if (mesh.vertices.empty())
+	{
+		printf("Mesh %s is empty, skipping\n", path);
+		return false;
+	}
+
+	printf("# %s: %d vertices, %d triangles; read in %.2f msec; indexed in %.2f msec\n", path, int(mesh.vertices.size()), int(mesh.indices.size() / 3), (middle - start) * 1000, (end - middle) * 1000);
+	return true;
+}
+
+void processDeinterleaved(const char* path)
+{
+	// Most algorithms in the library work out of the box with deinterleaved geometry, but some require slightly special treatment;
+	// this code runs a simplified version of complete opt. pipeline using deinterleaved geo. There's no compression performed but you
+	// can trivially run it by quantizing all elements and running meshopt_encodeVertexBuffer once for each vertex stream.
+	fastObjMesh* obj = fast_obj_read(path);
+	if (!obj)
+	{
+		printf("Error loading %s: file not found\n", path);
+		return;
+	}
+
+	size_t total_indices = 0;
+
+	for (unsigned int i = 0; i < obj->face_count; ++i)
+		total_indices += 3 * (obj->face_vertices[i] - 2);
+
+	std::vector<float> unindexed_pos(total_indices * 3);
+	std::vector<float> unindexed_nrm(total_indices * 3);
+	std::vector<float> unindexed_uv(total_indices * 2);
+
+	size_t vertex_offset = 0;
+	size_t index_offset = 0;
+
+	for (unsigned int i = 0; i < obj->face_count; ++i)
+	{
+		for (unsigned int j = 0; j < obj->face_vertices[i]; ++j)
 		{
-			printf("Mesh %s is empty, skipping\n", path);
-			return false;
+			fastObjIndex gi = obj->indices[index_offset + j];
+
+			// triangulate polygon on the fly; offset-3 is always the first polygon vertex
+			if (j >= 3)
+			{
+				memcpy(&unindexed_pos[(vertex_offset + 0) * 3], &unindexed_pos[(vertex_offset - 3) * 3], 3 * sizeof(float));
+				memcpy(&unindexed_nrm[(vertex_offset + 0) * 3], &unindexed_nrm[(vertex_offset - 3) * 3], 3 * sizeof(float));
+				memcpy(&unindexed_uv[(vertex_offset + 0) * 2], &unindexed_uv[(vertex_offset - 3) * 2], 2 * sizeof(float));
+				memcpy(&unindexed_pos[(vertex_offset + 1) * 3], &unindexed_pos[(vertex_offset - 1) * 3], 3 * sizeof(float));
+				memcpy(&unindexed_nrm[(vertex_offset + 1) * 3], &unindexed_nrm[(vertex_offset - 1) * 3], 3 * sizeof(float));
+				memcpy(&unindexed_uv[(vertex_offset + 1) * 2], &unindexed_uv[(vertex_offset - 1) * 2], 2 * sizeof(float));
+				vertex_offset += 2;
+			}
+
+			memcpy(&unindexed_pos[vertex_offset * 3], &obj->positions[gi.p * 3], 3 * sizeof(float));
+			memcpy(&unindexed_nrm[vertex_offset * 3], &obj->normals[gi.n * 3], 3 * sizeof(float));
+			memcpy(&unindexed_uv[vertex_offset * 2], &obj->texcoords[gi.t * 2], 2 * sizeof(float));
+			vertex_offset++;
 		}
 
-		printf("# %s: %d vertices, %d triangles; read in %.2f msec; indexed in %.2f msec\n", path, int(mesh.vertices.size()), int(mesh.indices.size() / 3), (middle - start) * 1000, (end - middle) * 1000);
-	}
-	else
-	{
-		mesh = generatePlane(200);
-
-		printf("# tessellated plane: %d vertices, %d triangles\n", int(mesh.vertices.size()), int(mesh.indices.size() / 3));
+		index_offset += obj->face_vertices[i];
 	}
 
-	return true;
+	fast_obj_destroy(obj);
+
+	double start = timestamp();
+
+	meshopt_Stream streams[] = {
+	    {&unindexed_pos[0], sizeof(float) * 3, sizeof(float) * 3},
+	    {&unindexed_nrm[0], sizeof(float) * 3, sizeof(float) * 3},
+	    {&unindexed_uv[0], sizeof(float) * 2, sizeof(float) * 2},
+	};
+
+	std::vector<unsigned int> remap(total_indices);
+
+	size_t total_vertices = meshopt_generateVertexRemapMulti(&remap[0], NULL, total_indices, total_indices, streams, sizeof(streams) / sizeof(streams[0]));
+
+	std::vector<unsigned int> indices(total_indices);
+	meshopt_remapIndexBuffer(&indices[0], NULL, total_indices, &remap[0]);
+
+	std::vector<float> pos(total_vertices * 3);
+	meshopt_remapVertexBuffer(&pos[0], &unindexed_pos[0], total_indices, sizeof(float) * 3, &remap[0]);
+
+	std::vector<float> nrm(total_vertices * 3);
+	meshopt_remapVertexBuffer(&nrm[0], &unindexed_nrm[0], total_indices, sizeof(float) * 3, &remap[0]);
+
+	std::vector<float> uv(total_vertices * 2);
+	meshopt_remapVertexBuffer(&uv[0], &unindexed_uv[0], total_indices, sizeof(float) * 2, &remap[0]);
+
+	double reindex = timestamp();
+
+	meshopt_optimizeVertexCache(&indices[0], &indices[0], total_indices, total_vertices);
+
+	meshopt_optimizeVertexFetchRemap(&remap[0], &indices[0], total_indices, total_vertices);
+	meshopt_remapVertexBuffer(&pos[0], &pos[0], total_vertices, sizeof(float) * 3, &remap[0]);
+	meshopt_remapVertexBuffer(&nrm[0], &nrm[0], total_vertices, sizeof(float) * 3, &remap[0]);
+	meshopt_remapVertexBuffer(&uv[0], &uv[0], total_vertices, sizeof(float) * 2, &remap[0]);
+
+	double optimize = timestamp();
+
+	// note: since shadow index buffer is computed based on regular vertex/index buffer, the stream points at the indexed data - not unindexed_pos
+	meshopt_Stream shadow_stream = {&pos[0], sizeof(float) * 3, sizeof(float) * 3};
+
+	std::vector<unsigned int> shadow_indices(total_indices);
+	meshopt_generateShadowIndexBufferMulti(&shadow_indices[0], &indices[0], total_indices, total_vertices, &shadow_stream, 1);
+
+	meshopt_optimizeVertexCache(&shadow_indices[0], &shadow_indices[0], total_indices, total_vertices);
+
+	double shadow = timestamp();
+
+	printf("Deintrlvd: %d vertices, reindexed in %.2f msec, optimized in %.2f msec, generated & optimized shadow indices in %.2f msec\n",
+	       int(total_vertices), (reindex - start) * 1000, (optimize - reindex) * 1000, (shadow - optimize) * 1000);
 }
 
 void process(const char* path)
@@ -860,8 +987,11 @@ void process(const char* path)
 	meshopt_optimizeVertexCache(&copy.indices[0], &copy.indices[0], copy.indices.size(), copy.vertices.size());
 	meshopt_optimizeVertexFetch(&copy.vertices[0], &copy.indices[0], copy.indices.size(), &copy.vertices[0], copy.vertices.size(), sizeof(Vertex));
 
-	stripify(copy);
+	stripify(copy, false);
+	stripify(copy, true);
+
 	meshlets(copy);
+	shadow(copy);
 
 	encodeIndex(copy);
 	packVertex<PackedVertex>(copy, "");
@@ -869,6 +999,15 @@ void process(const char* path)
 	encodeVertex<PackedVertexOct>(copy, "O");
 
 	simplify(mesh);
+	simplifySloppy(mesh);
+	simplifyComplete(mesh);
+	simplifyPoints(mesh);
+
+	spatialSort(mesh);
+	spatialSortTriangles(mesh);
+
+	if (path)
+		processDeinterleaved(path);
 }
 
 void processDev(const char* path)
@@ -881,36 +1020,26 @@ void processDev(const char* path)
 	meshopt_optimizeVertexCache(&copy.indices[0], &copy.indices[0], copy.indices.size(), copy.vertices.size());
 	meshopt_optimizeVertexFetch(&copy.vertices[0], &copy.indices[0], copy.indices.size(), &copy.vertices[0], copy.vertices.size(), sizeof(Vertex));
 
-	meshlets(copy);
-}
-
-void processCoverage()
-{
-	encodeIndexCoverage();
-	encodeVertexCoverage();
+	encodeIndex(copy);
+	encodeVertex<PackedVertex>(copy, "");
+	encodeVertex<PackedVertexOct>(copy, "O");
 }
 
 int main(int argc, char** argv)
 {
+	void runTests();
+
 	if (argc == 1)
 	{
-		printf("Usage: %s [.obj file]\n", argv[0]);
-		process(0);
+		runTests();
 	}
 	else
 	{
 		if (strcmp(argv[1], "-d") == 0)
 		{
-			if (argc > 2)
+			for (int i = 2; i < argc; ++i)
 			{
-				for (int i = 2; i < argc; ++i)
-				{
-					processDev(argv[i]);
-				}
-			}
-			else
-			{
-				processDev(0);
+				processDev(argv[i]);
 			}
 		}
 		else
@@ -920,7 +1049,7 @@ int main(int argc, char** argv)
 				process(argv[i]);
 			}
 
-			processCoverage();
+			runTests();
 		}
 	}
 }
