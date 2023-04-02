@@ -1,6 +1,10 @@
 #include "common.h"
 #include "device.h"
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 VkInstance createInstance()
 {
 	assert(volkGetInstanceVersion() >= VK_API_VERSION_1_1);
@@ -60,11 +64,11 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 
 	printf("%s", message);
 
-//#ifdef _WIN32
-//	OutputDebugStringA(message);
-//#endif
-//
-//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+#ifdef _WIN32
+	OutputDebugStringA(message);
+#endif
+
+	//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
 //		assert(!"Validation error encountered!");
 
 	return VK_FALSE;
