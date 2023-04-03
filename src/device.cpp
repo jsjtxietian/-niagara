@@ -193,6 +193,9 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	features.features.shaderInt16 = true;
 	features.features.shaderInt64 = true;
 
+	VkPhysicalDeviceVulkan11Features features11 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+	features11.storageBuffer16BitAccess = true;
+
 	VkPhysicalDeviceVulkan12Features features12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
 	features12.drawIndirectCount = true;
 	features12.storageBuffer8BitAccess = true;
@@ -217,7 +220,8 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	createInfo.enabledExtensionCount = uint32_t(extensions.size());
 
 	createInfo.pNext = &features;
-	features.pNext = &features12;
+	features.pNext = &features11;
+	features11.pNext = &features12;
 
 	if (meshShadingSupported)
 		features12.pNext = &featuresMesh;

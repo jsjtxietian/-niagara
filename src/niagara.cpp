@@ -914,7 +914,7 @@ int main(int argc, const char** argv)
 			}
 		};
 
-		auto cull = [&](VkPipeline pipeline, uint32_t timestamp, const char* phase)
+		auto cull = [&](VkPipeline pipeline, uint32_t timestamp, const char* phase, bool late)
 		{
 			VK_CHECKPOINT(phase);
 
@@ -929,7 +929,8 @@ int main(int argc, const char** argv)
 
 			VkBufferMemoryBarrier fillBarrier = bufferBarrier(dccb.buffer, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 			VkImageMemoryBarrier readBarrier = imageBarrier(depthPyramid.image, 0, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, 0, 1, &fillBarrier, 1, &readBarrier);
+			VkPipelineStageFlags srcStageFlags = late ? VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
+			vkCmdPipelineBarrier(commandBuffer, srcStageFlags, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, 0, 1, &fillBarrier, 1, &readBarrier);
 
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
@@ -1075,7 +1076,7 @@ int main(int argc, const char** argv)
 
 		// early cull: frustum cull & fill objects that *were* visible last frame
 		cullData.lateWorkaroundAMD = 0;
-		cull(drawcullPipeline, 2, "early cull");
+		cull(drawcullPipeline, 2, "early cull",true);
 
 		// early render: render objects that were visible last frame
 		render(renderPass, COUNTOF(clearValues), clearValues, 0, "early render");
@@ -1085,7 +1086,7 @@ int main(int argc, const char** argv)
 
 		// late cull: frustum + occlusion cull & fill objects that were *not* visible last frame
 		cullData.lateWorkaroundAMD = 1;
-		cull(drawculllatePipeline, 6, "late cull");
+		cull(drawculllatePipeline, 6, "late cull",true);
 
 		// late render: render objects that are visible this frame but weren't drawn in the early pass
 		render(renderPassLate, 0, nullptr, 1, "late render");
