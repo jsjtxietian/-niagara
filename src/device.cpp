@@ -52,9 +52,6 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)
 		return VK_FALSE;
 
-	// Works around https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/1512
-	if (strstr(pMessage, "Invalid opcode: 400 The Vulkan spec states: module must be a valid VkShaderModule handle"))
-		return VK_FALSE;
 
 	const char* type =
 		(flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
@@ -72,8 +69,8 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	OutputDebugStringA(message);
 #endif
 
-//	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-//		assert(!"Validation error encountered!");
+	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		assert(!"Validation error encountered!");
 
 	return VK_FALSE;
 }
@@ -195,12 +192,12 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 
 	VkPhysicalDeviceVulkan11Features features11 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
 	features11.storageBuffer16BitAccess = true;
+	features11.shaderDrawParameters = true;
 
 	VkPhysicalDeviceVulkan12Features features12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
 	features12.drawIndirectCount = true;
 	features12.storageBuffer8BitAccess = true;
     features12.uniformAndStorageBuffer8BitAccess = true;
-    features12.storagePushConstant8 = true;
     features12.shaderFloat16 = true;
     features12.shaderInt8 = true;
     features12.samplerFilterMinmax = true;
