@@ -7,10 +7,10 @@
 
 VkInstance createInstance()
 {
-	assert(volkGetInstanceVersion() >= VK_API_VERSION_1_2);
+	assert(volkGetInstanceVersion() >= VK_API_VERSION_1_3);
 
 	VkApplicationInfo appInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-	appInfo.apiVersion = VK_API_VERSION_1_2;
+	appInfo.apiVersion = VK_API_VERSION_1_3;
 
 	VkInstanceCreateInfo createInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
 	createInfo.pApplicationInfo = &appInfo;
@@ -51,7 +51,6 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	// We'll assume other performance warnings are also not useful.
 	if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)
 		return VK_FALSE;
-
 
 	const char* type =
 		(flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
@@ -130,7 +129,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice* physicalDevices, uint32_t 
 		if (!supportsPresentation(physicalDevices[i], familyIndex))
 			continue;
 
-		if (props.apiVersion < VK_API_VERSION_1_2)
+		if (props.apiVersion < VK_API_VERSION_1_3)
 			continue;
 
 		if (!preferred && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
@@ -175,11 +174,11 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 	};
 
-    if (pushDescriptorsSupported)
+	if (pushDescriptorsSupported)
 		extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
 
-    if (checkpointsSupported)
-        extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+	if (checkpointsSupported)
+		extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
 
 	if (meshShadingSupported)
 		extensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
@@ -197,12 +196,16 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	VkPhysicalDeviceVulkan12Features features12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
 	features12.drawIndirectCount = true;
 	features12.storageBuffer8BitAccess = true;
-    features12.uniformAndStorageBuffer8BitAccess = true;
-    features12.shaderFloat16 = true;
-    features12.shaderInt8 = true;
-    features12.samplerFilterMinmax = true;
-    features12.scalarBlockLayout = true;
-    features12.bufferDeviceAddress = true;
+	features12.uniformAndStorageBuffer8BitAccess = true;
+	features12.shaderFloat16 = true;
+	features12.shaderInt8 = true;
+	features12.samplerFilterMinmax = true;
+	features12.scalarBlockLayout = true;
+
+	VkPhysicalDeviceVulkan13Features features13 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+	features13.dynamicRendering = true;
+	features13.synchronization2 = true;
+	features13.maintenance4 = true;
 
 	// This will only be used if meshShadingSupported=true (see below)
 	VkPhysicalDeviceMeshShaderFeaturesNV featuresMesh = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV };
@@ -219,9 +222,10 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	createInfo.pNext = &features;
 	features.pNext = &features11;
 	features11.pNext = &features12;
+	features12.pNext = &features13;
 
 	if (meshShadingSupported)
-		features12.pNext = &featuresMesh;
+		features13.pNext = &featuresMesh;
 
 	VkDevice device = 0;
 	VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, 0, &device));
