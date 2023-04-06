@@ -8,6 +8,7 @@
 #include "math.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include <vector>
 #include <algorithm>
@@ -24,6 +25,8 @@ bool occlusionEnabled = true;
 
 bool debugPyramid = false;
 int debugPyramidLevel = 0;
+
+#define SHADER_PATH "shaders/"
 
 VkSemaphore createSemaphore(VkDevice device)
 {
@@ -483,29 +486,29 @@ int main(int argc, const char** argv)
 	bool rcs = false;
 
 	Shader drawcullCS = {};
-	rcs = loadShader(drawcullCS, device, "shaders/drawcull.comp.spv");
+	rcs = loadShader(drawcullCS, device, SHADER_PATH "drawcull.comp.spv");
 	assert(rcs);
 
 	Shader depthreduceCS = {};
-	rcs = loadShader(depthreduceCS, device, "shaders/depthreduce.comp.spv");
+	rcs = loadShader(depthreduceCS, device, SHADER_PATH "depthreduce.comp.spv");
 	assert(rcs);
 
 	Shader meshVS = {};
-	rcs = loadShader(meshVS, device, "shaders/mesh.vert.spv");
+	rcs = loadShader(meshVS, device, SHADER_PATH "mesh.vert.spv");
 	assert(rcs);
 
 	Shader meshFS = {};
-	rcs = loadShader(meshFS, device, "shaders/mesh.frag.spv");
+	rcs = loadShader(meshFS, device, SHADER_PATH "mesh.frag.spv");
 	assert(rcs);
 
 	Shader meshletMS = {};
 	Shader meshletTS = {};
 	if (meshShadingSupported)
 	{
-		rcs = loadShader(meshletMS, device, "shaders/meshlet.mesh.spv");
+		rcs = loadShader(meshletMS, device, SHADER_PATH "meshlet.mesh.spv");
 		assert(rcs);
 
-		rcs = loadShader(meshletTS, device, "shaders/meshlet.task.spv");
+		rcs = loadShader(meshletTS, device, SHADER_PATH "meshlet.task.spv");
 		assert(rcs);
 	}
 
@@ -627,7 +630,7 @@ int main(int argc, const char** argv)
 		uploadBuffer(device, commandPool, commandBuffer, queue, mdb, scratch, geometry.meshletdata.data(), geometry.meshletdata.size() * sizeof(uint32_t));
 	}
 
-	uint32_t drawCount = 1'000'000;
+	uint32_t drawCount = 1000000;
 	std::vector<MeshDraw> draws(drawCount);
 
 	srand(42);
@@ -742,7 +745,7 @@ int main(int argc, const char** argv)
 		VK_CHECK(vkBeginCommandBuffer(commandBuffer, &beginInfo));
 
 		vkCmdResetQueryPool(commandBuffer, queryPoolTimestamp, 0, 128);
-		vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 0);
+		vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, 0);
 
 		if (!dvbCleared)
 		{
@@ -789,15 +792,18 @@ int main(int argc, const char** argv)
 
 		auto fullbarrier = [&]()
 		{
-			VkMemoryBarrier wfi = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-			wfi.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-			wfi.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &wfi, 0, 0, 0, 0);
+			VkMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+			barrier.srcStageMask = barrier.dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+			barrier.srcAccessMask = barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+			VkDependencyInfo dependencyInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+			dependencyInfo.memoryBarrierCount = 1;
+			dependencyInfo.pMemoryBarriers = &barrier;
+			vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 		};
 
 		auto itsdeadjim = [&]()
 		{
-			printf("FATAL ERROR: DEVICE LOST (frame %lld)\n", frameIndex);
+			printf("FATAL ERROR: DEVICE LOST (frame %lld)\n", (long long)frameIndex);
 
 			if (checkpointsSupported)
 			{
@@ -869,7 +875,7 @@ int main(int argc, const char** argv)
 
 			VK_CHECKPOINT(phase);
 
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, timestamp + 0);
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, timestamp + 0);
 
 			VkBufferMemoryBarrier2 prefillBarrier = bufferBarrier(dccb.buffer,
 				VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
@@ -897,7 +903,6 @@ int main(int argc, const char** argv)
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT),
 			};
-
 			pipelineBarrier(commandBuffer, 0, COUNTOF(fillBarriers), fillBarriers, 1, &pyramidBarrier);
 
 			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -924,7 +929,7 @@ int main(int argc, const char** argv)
 
 			pipelineBarrier(commandBuffer, 0, COUNTOF(cullBarriers), cullBarriers, 0, nullptr);
 
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, timestamp + 1);
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, timestamp + 1);
 		};
 
 		auto render = [&](bool late, const VkClearColorValue& colorClear, const VkClearDepthStencilValue& depthClear, uint32_t query, const char* phase)
@@ -1001,7 +1006,7 @@ int main(int argc, const char** argv)
 		{
 			VK_CHECKPOINT("pyramid");
 
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 4);
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, 4);
 
 			VkImageMemoryBarrier2 depthBarriers[] =
 			{
@@ -1040,7 +1045,8 @@ int main(int argc, const char** argv)
 
 				VkImageMemoryBarrier2 reduceBarrier = imageBarrier(depthPyramid.image,
 					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL,
-					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL);
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
+					VK_IMAGE_ASPECT_COLOR_BIT, i, 1);
 
 				pipelineBarrier(commandBuffer, 0, 0, nullptr, 1, &reduceBarrier);
 			}
@@ -1052,16 +1058,16 @@ int main(int argc, const char** argv)
 
 			pipelineBarrier(commandBuffer, 0, 0, nullptr, 1, &depthWriteBarrier);
 
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 5);
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, 5);
 		};
 
 		VkImageMemoryBarrier2 renderBeginBarriers[] =
 		{
 			imageBarrier(colorTarget.image,
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL),
 			imageBarrier(depthTarget.image,
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
 				VK_IMAGE_ASPECT_DEPTH_BIT),
 		};
@@ -1071,7 +1077,7 @@ int main(int argc, const char** argv)
 		vkCmdResetQueryPool(commandBuffer, queryPoolPipeline, 0, 4);
 
 		VkClearColorValue colorClear = { 48.f / 255.f, 10.f / 255.f, 36.f / 255.f, 1 };
-		VkClearDepthStencilValue depthStencil = { 0.f, 0 };
+		VkClearDepthStencilValue depthClear = { 0.f, 0 };
 
 		VK_CHECKPOINT("frame");
 
@@ -1080,7 +1086,7 @@ int main(int argc, const char** argv)
 		cull(drawcullPipeline, 2, "early cull", /* late= */ false);
 
 		// early render: render objects that were visible last frame
-		render(/* late= */ false, colorClear, depthStencil, 0, "early render");
+		render(/* late= */ false, colorClear, depthClear, 0, "early render");
 
 		// depth pyramid generation
 		pyramid();
@@ -1090,7 +1096,7 @@ int main(int argc, const char** argv)
 		cull(drawculllatePipeline, 6, "late cull", /* late= */ true);
 
 		// late render: render objects that are visible this frame but weren't drawn in the early pass
-		render(/* late= */ true, colorClear, depthStencil, 1, "late render");
+		render(/* late= */ true, colorClear, depthClear, 1, "late render");
 
 		VkImageMemoryBarrier2 copyBarriers[] =
 		{
@@ -1143,11 +1149,11 @@ int main(int argc, const char** argv)
 
 		VkImageMemoryBarrier2 presentBarrier = imageBarrier(swapchain.images[imageIndex],
 			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+			0, 0, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
 		pipelineBarrier(commandBuffer, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 1, &presentBarrier);
 
-		vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 1);
+		vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPoolTimestamp, 1);
 
 		VK_CHECK(vkEndCommandBuffer(commandBuffer));
 

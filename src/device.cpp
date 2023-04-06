@@ -80,10 +80,10 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	char message[4096];
 	snprintf(message, COUNTOF(message), "%s: %s\n", type, pMessage);
 
-	printf("%s", message);
+	//printf("%s", message);
 
 #ifdef _WIN32
-	OutputDebugStringA(message);
+	//OutputDebugStringA(message);
 #endif
 
 	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
