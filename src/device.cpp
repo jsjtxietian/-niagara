@@ -1,6 +1,8 @@
 #include "common.h"
 #include "device.h"
 
+#include <stdio.h>
+
 // Synchronization validation is enabled by default in Debug but it's rather slow
 #define SYNC_VALIDATION 1
 
@@ -11,7 +13,6 @@
 VkInstance createInstance()
 {
 	assert(volkGetInstanceVersion() >= VK_API_VERSION_1_3);
-
 
 	VkApplicationInfo appInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
 	appInfo.apiVersion = VK_API_VERSION_1_3;
@@ -49,6 +50,9 @@ VkInstance createInstance()
 #ifdef VK_USE_PLATFORM_WIN32_KHR
 		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 #endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+		VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
+#endif
 #ifdef _DEBUG
 		VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
 #endif
@@ -80,10 +84,10 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	char message[4096];
 	snprintf(message, COUNTOF(message), "%s: %s\n", type, pMessage);
 
-	//printf("%s", message);
+	printf("%s", message);
 
 #ifdef _WIN32
-	//OutputDebugStringA(message);
+	OutputDebugStringA(message);
 #endif
 
 	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
@@ -150,7 +154,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice* physicalDevices, uint32_t 
 		if (props.apiVersion < VK_API_VERSION_1_3)
 			continue;
 
-		if (!preferred && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+		if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 		{
 			preferred = physicalDevices[i];
 		}
@@ -199,7 +203,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 		extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
 
 	if (meshShadingSupported)
-		extensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
+		extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
 	VkPhysicalDeviceFeatures2 features = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 	features.features.multiDrawIndirect = true;
@@ -226,7 +230,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	features13.maintenance4 = true;
 
 	// This will only be used if meshShadingSupported=true (see below)
-	VkPhysicalDeviceMeshShaderFeaturesNV featuresMesh = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV };
+	VkPhysicalDeviceMeshShaderFeaturesEXT featuresMesh = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT };
 	featuresMesh.taskShader = true;
 	featuresMesh.meshShader = true;
 

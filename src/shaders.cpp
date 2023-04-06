@@ -5,7 +5,9 @@
 
 #include <vector>
 
-#if VK_HEADER_VERSION >= 135
+#ifdef __linux__
+#include <spirv/unified1/spirv.h>
+#elif VK_HEADER_VERSION >= 135
 #include <spirv-headers/spirv.h>
 #else
 #include <vulkan/spirv.h>
@@ -32,10 +34,10 @@ static VkShaderStageFlagBits getShaderStage(SpvExecutionModel executionModel)
 		return VK_SHADER_STAGE_FRAGMENT_BIT;
 	case SpvExecutionModelGLCompute:
 		return VK_SHADER_STAGE_COMPUTE_BIT;
-	case SpvExecutionModelTaskNV:
-		return VK_SHADER_STAGE_TASK_BIT_NV;
-	case SpvExecutionModelMeshNV:
-		return VK_SHADER_STAGE_MESH_BIT_NV;
+	case SpvExecutionModelTaskEXT:
+		return VK_SHADER_STAGE_TASK_BIT_EXT;
+	case SpvExecutionModelMeshEXT:
+		return VK_SHADER_STAGE_MESH_BIT_EXT;
 
 	default:
 		assert(!"Unsupported execution model");

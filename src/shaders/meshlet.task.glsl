@@ -2,7 +2,7 @@
 
 #extension GL_EXT_shader_16bit_storage: require
 #extension GL_EXT_shader_8bit_storage: require
-#extension GL_NV_mesh_shader: require
+#extension GL_EXT_mesh_shader: require
 
 #extension GL_GOOGLE_include_directive: require
 
@@ -31,28 +31,31 @@ layout(binding = 2) readonly buffer Meshlets
 	Meshlet meshlets[];
 };
 
-out taskNV block
-{
-	uint meshletIndices[32];
-};
+taskPayloadSharedEXT MeshTaskPayload payload;
 
 bool coneCull(vec3 center, float radius, vec3 cone_axis, float cone_cutoff, vec3 camera_position)
 {
 	return dot(center - camera_position, cone_axis) >= cone_cutoff * length(center - camera_position) + radius;
 }
 
-shared uint meshletCount;
+#if CULL
+shared int sharedCount;
+#endif
 
 void main()
 {
 	uint ti = gl_LocalInvocationID.x;
 	uint mgi = gl_WorkGroupID.x;
 
-	MeshDraw meshDraw = draws[drawCommands[gl_DrawIDARB].drawId];
+	uint drawId = drawCommands[gl_DrawIDARB].drawId;
+	MeshDraw meshDraw = draws[drawId];
 
-	uint mi = mgi * 32 + ti;
+	uint mi = mgi * 32 + ti + drawCommands[gl_DrawIDARB].taskOffset;
 
 #if CULL
+	sharedCount = 0;
+	memoryBarrierShared();
+
 	vec3 center = rotateQuat(meshlets[mi].center, meshDraw.orientation) * meshDraw.scale + meshDraw.position;
 	float radius = meshlets[mi].radius * meshDraw.scale;
 	vec3 cone_axis = rotateQuat(vec3(int(meshlets[mi].cone_axis[0]) / 127.0, int(meshlets[mi].cone_axis[1]) / 127.0, int(meshlets[mi].cone_axis[2]) / 127.0), meshDraw.orientation);
@@ -60,21 +63,22 @@ void main()
 
 	bool accept = !coneCull(center, radius, cone_axis, cone_cutoff, vec3(0, 0, 0));
 
-	uvec4 ballot = subgroupBallot(accept);
-
-	uint index = subgroupBallotExclusiveBitCount(ballot);
-
 	if (accept)
-		meshletIndices[index] = mi;
+	{
+		uint index = atomicAdd(sharedCount, 1);
 
-	uint count = subgroupBallotBitCount(ballot);
+		payload.meshletIndices[index] = mi;
+	}
 
-	if (ti == 0)
-		gl_TaskCountNV = count;
+	payload.drawId = drawId;
+
+	memoryBarrierShared(); // for sharedCount
+
+	EmitMeshTasksEXT(sharedCount, 1, 1);
 #else
-	meshletIndices[ti] = mi;
+	payload.drawId = drawId;
+	payload.meshletIndices[ti] = mi;
 
-	if (ti == 0)
-		gl_TaskCountNV = 32;
+	EmitMeshTasksEXT(32, 1, 1);
 #endif
 }

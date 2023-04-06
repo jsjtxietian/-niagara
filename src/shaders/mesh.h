@@ -77,8 +77,16 @@ struct MeshDrawCommand
 	uint firstIndex;
 	uint vertexOffset;
 	uint firstInstance;
-    uint taskCount;
-    uint firstTask;
+	uint taskOffset;
+	uint taskX;
+	uint taskY;
+	uint taskZ;
+};
+
+struct MeshTaskPayload
+{
+	uint drawId;
+	uint meshletIndices[32];
 };
 
 vec3 rotateQuat(vec3 v, vec4 q)
