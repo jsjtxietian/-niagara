@@ -265,17 +265,7 @@ struct BufferView
 	size_t bytes;
 };
 
-struct TempFile
-{
-	std::string path;
-	int fd;
-
-	TempFile();
-	TempFile(const char* suffix);
-	~TempFile();
-
-	void create(const char* suffix);
-};
+std::string getTempPrefix();
 
 std::string getFullPath(const char* path, const char* base_path);
 std::string getFileName(const char* path);
@@ -283,9 +273,10 @@ std::string getExtension(const char* path);
 
 bool readFile(const char* path, std::string& data);
 bool writeFile(const char* path, const std::string& data);
+void removeFile(const char* path);
 
 cgltf_data* parseObj(const char* path, std::vector<Mesh>& meshes, const char** error);
-cgltf_data* parseGltf(const char* path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, std::string& extras, const char** error);
+cgltf_data* parseGltf(const char* path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const char** error);
 
 void processAnimation(Animation& animation, const Settings& settings);
 void processMesh(Mesh& mesh, const Settings& settings);
@@ -302,7 +293,7 @@ void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings);
 void filterEmptyMeshes(std::vector<Mesh>& meshes);
 void filterStreams(Mesh& mesh, const MaterialInfo& mi);
 
-void mergeMeshMaterials(cgltf_data* data, const std::string& extras, std::vector<Mesh>& meshes, const Settings& settings);
+void mergeMeshMaterials(cgltf_data* data, std::vector<Mesh>& meshes, const Settings& settings);
 void markNeededMaterials(cgltf_data* data, std::vector<MaterialInfo>& materials, const std::vector<Mesh>& meshes, const Settings& settings);
 
 bool hasValidTransform(const cgltf_texture_view& view);
@@ -346,7 +337,7 @@ void append(std::string& s, size_t v);
 void append(std::string& s, float v);
 void append(std::string& s, const char* v);
 void append(std::string& s, const std::string& v);
-void appendJson(std::string& s, const char* begin, const char* end);
+void appendJson(std::string& s, const char* data);
 
 const char* attributeType(cgltf_attribute_type type);
 const char* animationPath(cgltf_animation_path_type type);
@@ -370,7 +361,7 @@ void writeCamera(std::string& json, const cgltf_camera& camera);
 void writeLight(std::string& json, const cgltf_light& light);
 void writeArray(std::string& json, const char* name, const std::string& contents);
 void writeExtensions(std::string& json, const ExtensionInfo* extensions, size_t count);
-void writeExtras(std::string& json, const std::string& data, const cgltf_extras& extras);
+void writeExtras(std::string& json, const cgltf_extras& extras);
 void writeScene(std::string& json, const cgltf_scene& scene, const std::string& roots);
 
 /**
