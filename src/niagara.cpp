@@ -82,6 +82,9 @@ struct alignas(16) Meshlet
 struct alignas(16) Globals
 {
 	mat4 projection;
+
+	float screenWidth, screenHeight, znear, zfar; // symmetric projection parameters
+	float frustum[4]; // data for left/right/top/bottom frustum planes
 };
 
 struct alignas(16) MeshDraw
@@ -797,6 +800,14 @@ int main(int argc, const char** argv)
 
 		Globals globals = {};
 		globals.projection = projection;
+		globals.screenWidth = float(swapchain.width);
+		globals.screenHeight = float(swapchain.height);
+		globals.znear = znear;
+		globals.zfar = drawDistance;
+		globals.frustum[0] = frustumX.x;
+		globals.frustum[1] = frustumX.z;
+		globals.frustum[2] = frustumY.y;
+		globals.frustum[3] = frustumY.z;
 
 		auto fullbarrier = [&]()
 		{
@@ -1215,7 +1226,7 @@ int main(int argc, const char** argv)
 		double drawsPerSec = double(drawCount) / double(frameGpuAvg * 1e-3);
 
 		char title[256];
-		sprintf(title, "cpu: %.2f ms; gpu: %.2f ms (cull: %.2f ms, pyramid: %.2f ms, cull late: %.2f); triangles %.1fM; %.1fB tri/sec, %.1fM draws/sec; mesh shading %s, frustum culling %s, occlusion culling %s, level-of-detail %s",
+		sprintf(title, "cpu: %.2f ms; gpu: %.2f ms (cull: %.2f ms, pyramid: %.2f ms, cull late: %.2f); triangles %.2fM; %.1fB tri/sec, %.1fM draws/sec; mesh shading %s, frustum culling %s, occlusion culling %s, level-of-detail %s",
 			frameCpuAvg, frameGpuAvg, cullGpuTime, pyramidGpuTime, culllateGpuTime,
 			double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,
 			meshShadingSupported && meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF", occlusionEnabled ? "ON" : "OFF", lodEnabled ? "ON" : "OFF");
