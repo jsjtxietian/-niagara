@@ -1,3 +1,6 @@
+#define TASK_WGSIZE 64
+#define MESH_WGSIZE 64
+
 struct Vertex
 {
 	float vx, vy, vz;
@@ -72,12 +75,17 @@ struct MeshDraw
 struct MeshDrawCommand
 {
 	uint drawId;
+
+	// used by traditional raster
 	uint indexCount;
 	uint instanceCount;
 	uint firstIndex;
 	uint vertexOffset;
 	uint firstInstance;
+
+	// used by mesh shading path
 	uint taskOffset;
+	uint taskCount;
 	uint taskX;
 	uint taskY;
 	uint taskZ;
@@ -86,7 +94,7 @@ struct MeshDrawCommand
 struct MeshTaskPayload
 {
 	uint drawId;
-	uint meshletIndices[32];
+	uint meshletIndices[TASK_WGSIZE];
 };
 
 vec3 rotateQuat(vec3 v, vec4 q)

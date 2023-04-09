@@ -12,9 +12,7 @@
 
 #define DEBUG 0
 
-#define GROUP 64
-
-layout(local_size_x = GROUP, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = MESH_WGSIZE, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 124) out;
 
 layout(push_constant) uniform block
@@ -40,6 +38,11 @@ layout(binding = 2) readonly buffer Meshlets
 layout(binding = 3) readonly buffer MeshletData
 {
 	uint meshletData[];
+};
+
+layout(binding = 3) readonly buffer MeshletData8
+{
+	uint8_t meshletData8[];
 };
 
 layout(binding = 4) readonly buffer Vertices
@@ -82,7 +85,7 @@ void main()
 #endif
 
 	// TODO: if we have meshlets with 62 or 63 vertices then we pay a small penalty for branch divergence here - we can instead redundantly xform the last vertex
-	for (uint i = ti; i < vertexCount; i += GROUP)
+	for (uint i = ti; i < vertexCount; i += MESH_WGSIZE)
 	{
 		uint vi = meshletData[vertexOffset + i] + meshDraw.vertexOffset;
 
@@ -98,11 +101,11 @@ void main()
 	#endif
 	}
 
-	for (uint i = ti; i < triangleCount; i += GROUP)
+	for (uint i = ti; i < triangleCount; i += MESH_WGSIZE)
 	{
-		uint tri = meshletData[indexOffset + i];
+		uint offset = indexOffset * 4 + i * 3;
 
-		gl_PrimitiveTriangleIndicesEXT[i] = uvec3((tri >> 16) & 0xff, (tri >> 8) & 0xff, tri & 0xff);
+		gl_PrimitiveTriangleIndicesEXT[i] = uvec3(uint(meshletData8[offset]), uint(meshletData8[offset + 1]), uint(meshletData8[offset + 2]));
 	}
 
 	SetMeshOutputsEXT(vertexCount, triangleCount);
