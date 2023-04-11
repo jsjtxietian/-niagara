@@ -218,6 +218,7 @@
     <ClInclude Include="math.h" />
     <ClInclude Include="resources.h" />
     <ClInclude Include="shaders.h" />
+    <ClInclude Include="shaders\math.h" />
     <ClInclude Include="shaders\mesh.h" />
     <ClInclude Include="swapchain.h" />
   </ItemGroup>
