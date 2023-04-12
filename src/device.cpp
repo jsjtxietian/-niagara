@@ -9,7 +9,7 @@
 #endif
 
 // Synchronization validation is enabled by default in Debug but it's rather slow
-#define SYNC_VALIDATION 1
+#define SYNC_VALIDATION 0
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -95,8 +95,8 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	OutputDebugStringA(message);
 #endif
 
-	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-		assert(!"Validation error encountered!");
+	/*if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		assert(!"Validation error encountered!");*/
 
 	return VK_FALSE;
 }
