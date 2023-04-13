@@ -54,9 +54,6 @@
     <ClInclude Include="..\extern\glfw\src\null_platform.h">
       <Filter>glfw</Filter>
     </ClInclude>
-    <ClInclude Include="shaders\math.h">
-      <Filter>shaders</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\extern\glfw\src\context.c">
@@ -191,6 +188,9 @@
       <Filter>shaders</Filter>
     </CustomBuild>
     <CustomBuild Include="shaders\depthreduce.comp.glsl">
+      <Filter>shaders</Filter>
+    </CustomBuild>
+    <CustomBuild Include="shaders\tasksubmit.comp.glsl">
       <Filter>shaders</Filter>
     </CustomBuild>
   </ItemGroup>
