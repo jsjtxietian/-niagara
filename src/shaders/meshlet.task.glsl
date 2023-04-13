@@ -6,10 +6,6 @@
 
 #extension GL_GOOGLE_include_directive: require
 
-#extension GL_KHR_shader_subgroup_ballot: require
-
-#extension GL_ARB_shader_draw_parameters: require
-
 #include "mesh.h"
 #include "math.h"
 
@@ -24,9 +20,9 @@ layout(push_constant) uniform block
 	Globals globals;
 };
 
-layout(binding = 0) readonly buffer DrawCommands
+layout(binding = 0) readonly buffer TaskCommands
 {
-	MeshDrawCommand drawCommands[];
+	MeshTaskCommand taskCommands[];
 };
 
 layout(binding = 1) readonly buffer Draws
@@ -48,23 +44,22 @@ layout(binding = 6) uniform sampler2D depthPyramid;
 
 taskPayloadSharedEXT MeshTaskPayload payload;
 
-bool coneCull(vec3 center, float radius, vec3 cone_axis, float cone_cutoff, vec3 camera_position)
-{
-	return dot(center - camera_position, cone_axis) >= cone_cutoff * length(center - camera_position) + radius;
-}
-
 #if CULL
 shared int sharedCount;
 #endif
 
 void main()
 {
-	uint drawId = drawCommands[gl_DrawIDARB].drawId;
+	MeshTaskCommand command = taskCommands[gl_WorkGroupID.x];
+	uint drawId = command.drawId;
 	MeshDraw meshDraw = draws[drawId];
-	uint lateDrawVisibility = drawCommands[gl_DrawIDARB].lateDrawVisibility;
 
-	uint mgi = gl_GlobalInvocationID.x;
-	uint mi = mgi + drawCommands[gl_DrawIDARB].taskOffset;
+	uint lateDrawVisibility = command.lateDrawVisibility;
+	uint taskCount = command.taskCount;
+
+	uint mgi = gl_LocalInvocationID.x;
+	uint mi = mgi + command.taskOffset;
+	uint mvi = mgi + command.meshletVisibilityOffset;
 
 #if CULL
 	sharedCount = 0;
@@ -75,9 +70,7 @@ void main()
 	vec3 cone_axis = rotateQuat(vec3(int(meshlets[mi].cone_axis[0]) / 127.0, int(meshlets[mi].cone_axis[1]) / 127.0, int(meshlets[mi].cone_axis[2]) / 127.0), meshDraw.orientation);
 	float cone_cutoff = int(meshlets[mi].cone_cutoff) / 127.0;
 
-	uint mvi = meshDraw.meshletVisibilityOffset + mgi;
-
-	bool valid = mgi < drawCommands[gl_DrawIDARB].taskCount;
+	bool valid = mgi < taskCount;
 	bool visible = valid;
 	bool skip = false;
 
@@ -148,7 +141,7 @@ void main()
 	payload.drawId = drawId;
 	payload.meshletIndices[gl_LocalInvocationIndex] = mi;
 
-	uint count = min(TASK_WGSIZE, drawCommands[gl_DrawIDARB].taskCount - gl_WorkGroupID.x * TASK_WGSIZE);
+	uint count = min(TASK_WGSIZE, taskCount - gl_WorkGroupID.x * TASK_WGSIZE);
 
 	EmitMeshTasksEXT(count, 1, 1);
 #endif

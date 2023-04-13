@@ -6,9 +6,8 @@
 
 #extension GL_GOOGLE_include_directive: require
 
-#extension GL_ARB_shader_draw_parameters: require
-
 #include "mesh.h"
+#include "math.h"
 
 #define DEBUG 0
 #define CULL 1
@@ -19,11 +18,6 @@ layout(triangles, max_vertices = 64, max_primitives = 64) out;
 layout(push_constant) uniform block
 {
 	Globals globals;
-};
-
-layout(binding = 0) readonly buffer DrawCommands
-{
-	MeshDrawCommand drawCommands[];
 };
 
 layout(binding = 1) readonly buffer Draws
