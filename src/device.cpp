@@ -8,7 +8,7 @@
 #define KHR_VALIDATION 1
 #endif
 
-// Synchronization validation is enabled by default in Debug but it's rather slow
+// Synchronization validation is disable by default in Debug since it's rather slow
 #define SYNC_VALIDATION 0
 
 #ifdef _WIN32
@@ -95,8 +95,8 @@ static VkBool32 VKAPI_CALL debugReportCallback(VkDebugReportFlagsEXT flags, VkDe
 	OutputDebugStringA(message);
 #endif
 
-	/*if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-		assert(!"Validation error encountered!");*/
+	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		assert(!"Validation error encountered!");
 
 	return VK_FALSE;
 }
@@ -187,7 +187,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice* physicalDevices, uint32_t 
 	return result;
 }
 
-VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t familyIndex, bool pushDescriptorsSupported, bool checkpointsSupported, bool meshShadingSupported)
+VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t familyIndex, bool pushDescriptorsSupported, bool meshShadingSupported, bool profilingSupported)
 {
 	float queuePriorities[] = { 1.0f };
 
@@ -204,11 +204,11 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 	if (pushDescriptorsSupported)
 		extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
 
-	if (checkpointsSupported)
-		extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
-
 	if (meshShadingSupported)
 		extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+	if (profilingSupported)
+		extensions.push_back(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
 
 	VkPhysicalDeviceFeatures2 features = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 	features.features.multiDrawIndirect = true;
